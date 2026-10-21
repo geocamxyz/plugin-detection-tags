@@ -35,6 +35,15 @@ fetched from v2 address features on a layer built from legacy.
 It finds the v2 service rather than being told it: the legacy service root
 advertises `geocam.v2Path`. Pass `src` only to override that.
 
+## Where it mounts
+
+The map's own UI (`mapView.ui.add(…, "top-right")`), not `viewer.addControl`.
+
+The viewer's control strip lives inside `.geocam-viewer`, which the page sets to
+`display: none` whenever the panorama is collapsed — i.e. in map mode, which is
+exactly when you want to recolour shots on the map. What this widget drives is a
+map layer, so it belongs with the map's controls.
+
 ## Behaviour
 
 - **One category at a time.** Selecting another replaces the first; clicking the

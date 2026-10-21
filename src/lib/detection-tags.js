@@ -16,6 +16,7 @@ const injectStyle = (id, rules) => {
 };
 
 const STYLES = `
+  .gdt-container { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
   .gdt-panel { width: 240px; max-height: 60vh; overflow-y: auto; font: 13px/1.4 system-ui, sans-serif;
     color: #1f2328; background: #fff; border: 1px solid rgba(15,16,6,.1); border-radius: 14px;
     box-shadow: 0 1px 2px rgba(0,0,0,.06); padding: 10px; }
@@ -45,11 +46,14 @@ const STYLES = `
 `;
 
 // Which of the shot-position layers we recolour. 0 is processed positions, the
-// layer the map draws by default.
-const SHOT_LAYER_SUFFIX = "/0";
+// layer the map draws by default. Used both as the service path when querying
+// and as the Esri layerId when locating the drawn layer.
+const SHOT_LAYER_ID = 0;
+const SHOT_LAYER_SUFFIX = `/${SHOT_LAYER_ID}`;
 
 export const detectionTags = function (config = {}) {
   let viewer;
+  let container;
   let button;
   let panel;
   let listEl;
@@ -137,12 +141,16 @@ export const detectionTags = function (config = {}) {
   // map by the service path it was built from. Both services expose shots.id as
   // the object id, which is what lets ids fetched from v2 address features on a
   // layer drawn from legacy.
+  // Matched on layerId, NOT on the url ending in /0. Esri normalises a
+  // FeatureLayer built from ".../FeatureServer/0" so that `url` becomes the
+  // service root and the index moves to `layerId` — so a url suffix test never
+  // matches and the effect silently never applies.
   const findShotsLayer = () => {
     if (shotsLayer) return shotsLayer;
     const layers = (mapView && mapView.map && mapView.map.allLayers) || [];
     const all = layers.toArray ? layers.toArray() : Array.from(layers);
     shotsLayer = all.find(
-      (l) => typeof l.url === "string" && l.url.replace(/\/+$/, "").endsWith(SHOT_LAYER_SUFFIX)
+      (l) => l.type === "feature" && l.layerId === SHOT_LAYER_ID
     );
     return shotsLayer;
   };
@@ -327,8 +335,16 @@ export const detectionTags = function (config = {}) {
     button.addEventListener("click", () => {
       panel.hidden = !panel.hidden;
     });
-    viewer.addControl(button, "right-top");
-    viewer.addControl(buildPanel(), "right-top");
+
+    // Added to the *map's* UI, not viewer.addControl. The viewer's control
+    // strip lives inside .geocam-viewer, which the page sets to display:none
+    // whenever the panorama is collapsed — which is map mode, exactly when you
+    // want to recolour shots on the map. What this widget drives is a map
+    // layer, so it belongs with the map's own controls.
+    container = node("DIV", { class: "gdt-container" });
+    container.appendChild(button);
+    container.appendChild(buildPanel());
+    mapView.ui.add(container, "top-right");
     render();
     console.info(
       `detection-tags: ${categories.length} categories, shot total ${
@@ -339,9 +355,10 @@ export const detectionTags = function (config = {}) {
 
   this.destroy = function () {
     applyEffect(null);
-    [button, panel].forEach((el) => {
-      if (el && el.parentNode) el.parentNode.removeChild(el);
-    });
-    button = panel = listEl = clearBtn = fadeInput = null;
+    if (container) {
+      if (mapView && mapView.ui) mapView.ui.remove(container);
+      if (container.parentNode) container.parentNode.removeChild(container);
+    }
+    container = button = panel = listEl = clearBtn = fadeInput = null;
   };
 };
