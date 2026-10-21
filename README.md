@@ -65,46 +65,54 @@ map layer, so it belongs with the map's controls.
 
 ## How the recolouring works
 
-Two mechanisms, doing two different jobs.
+The hits get **their own FeatureLayer**, drawn from the v2 service and filtered
+server-side with `tags=`, in a magenta marker. Selecting swaps that layer;
+clearing removes it. "Fade the rest" just drops the base layer's `opacity`.
 
-**`layerView.highlight(ids)`** marks the hits — a magenta halo, in a colour
-independent of whatever the renderer gave the shot. A CSS filter cannot do this
-job: the service renders shots with a **unique-value** renderer, so their base
-colours already differ and `saturate()` / `hue-rotate()` shift each one
-somewhere different rather than landing them all on one obvious colour. That is
-why `includedEffect` was dropped — against unfaded neighbours it was nearly
-invisible.
+### Why a separate layer, and not marking the base one
 
-**`featureEffect`** fades everything else, and only when "fade the rest" is on:
+Because the base layer frequently **is not drawing the hit**. The connector
+thins it by zoom:
 
 ```js
-layer.featureEffect = { filter: { objectIds: ids }, excludedEffect: "opacity(12%) grayscale(100%)" };
+layer.definitionExpression = `mod(id,${mod}) = 0 AND extent = ...`;
 ```
 
-The fade stays a `featureEffect` rather than a renderer swap because it leaves
-the service's symbology alone (assigning a renderer overrides it — see the note
-in `user-layers`) and composes with the connector's zoom-thinning
-`definitionExpression` instead of competing for the same property.
+At zoom 18 over the test cell that is `mod(id,5)` — 3 of 18 shots fetched. A
+sparse category like `book` (1 of 18) is then usually not on screen at all, so
+anything that marks existing features (`featureEffect`, `layerView.highlight`)
+has nothing to mark and the selection looks broken. A layer of our own is not
+subject to that expression.
 
-### A caveat on `highlightOptions`
+Three earlier approaches, and why each was dropped:
 
-`highlightOptions` is **view-global** in ArcGIS 4.25 (per-layer arrived later),
-and `user-layers` highlights its own features relying on the default colour. So
-this plugin installs its magenta options only while a category is selected and
-restores the previous value on clear — bounding the overlap to a selection the
-operator deliberately switched on. If both are active at once, a user-layer
-feature highlight will also be magenta until the category is cleared.
+| Approach | Why not |
+|---|---|
+| `includedEffect` CSS filter | The service uses a **unique-value** renderer, so shots already differ in colour; `saturate()`/`hue-rotate()` move each one somewhere different instead of onto one obvious colour. Nearly invisible against unfaded neighbours. |
+| `layerView.highlight(ids)` | Visible, but only marks features the base layer actually drew — the thinning problem above. Also needed `highlightOptions`, which is **view-global** in 4.25 and would have recoloured `user-layers`' own highlights. |
+| `featureEffect` with `objectIds` | Same thinning problem, plus it shipped every hit id to the client, capping how large a category could be. |
 
-Requires ArcGIS JS **4.22+** for `featureEffect`; the connector loads 4.25/4.26.
+The current approach has none of those: the filtering is server-side so there
+is no id list and no size ceiling, and nothing global is mutated.
+
+### Authentication of the hit layer
+
+The PAT is registered with Esri's `IdentityManager`, not passed in
+`customParameters`. Esri **strips `token`** from custom parameters because it
+manages credentials itself, which silently 403s the layer's own metadata
+request while leaving other custom parameters (`tags`) intact. Same-origin,
+no token is needed and none is registered.
+
+Requires ArcGIS JS **4.22+**; the connector loads 4.26.
 
 ## Known limits
 
-- The highlight is an `objectIds` filter, so the id list is fetched to the
-  client. Fine for a cell of a few thousand shots; a capture-sized hit list has
-  not been measured. If it bites, the fix is a second FeatureLayer pointed at v2
-  with `customParameters: { tags: … }`, which filters server-side.
 - Single selection only. Two categories at once would need the per-tag `tag_*`
   fields and a three-field `UniqueValueRenderer`.
+- The hit layer is **not** zoom-thinned, so a category covering most of a very
+  large capture draws every one of its shots. That is the right default for
+  sparse categories, which are the ones worth looking at, and the dense ones are
+  disabled at full coverage — but it has not been measured on a 50k capture.
 
 ## Build
 

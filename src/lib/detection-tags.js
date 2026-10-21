@@ -66,9 +66,9 @@ export const detectionTags = function (config = {}) {
   let shotCount = null; // cell total, the denominator
   let selected = null; // field name of the active category, or null
   let fadeOthers = true;
-  let shotsLayer = null;
-  let highlightHandle = null;
-  let savedHighlightOptions; // undefined = ours is not currently installed
+  let shotsLayer = null; // the base layer the connector draws
+  let hitLayer = null; // our own layer, only the selected category
+  let tokenRegistered = false;
 
   injectStyle("geocam-detection-tags", STYLES);
 
@@ -129,14 +129,6 @@ export const detectionTags = function (config = {}) {
       }));
   };
 
-  const idsFor = async (field) => {
-    const body = await fetchJson(`${v2Base}${SHOT_LAYER_SUFFIX}/query`, {
-      tags: field,
-      returnIdsOnly: "true",
-    });
-    return body.objectIds || [];
-  };
-
   // --- the map -------------------------------------------------------------
 
   // The connector keeps its layer list private, so find the shot layer on the
@@ -157,80 +149,85 @@ export const detectionTags = function (config = {}) {
     return shotsLayer;
   };
 
-  // The halo drawn over selected shots. A CSS filter cannot do this job: the
-  // service renders shots with a unique-value renderer, so their base colours
-  // already differ, and saturate()/hue-rotate() shift each one differently
-  // rather than landing them all on one obvious colour.
-  const HIGHLIGHT = {
-    color: [255, 0, 255],
-    haloColor: [255, 0, 255],
-    haloOpacity: 1,
-    fillOpacity: 0.9,
+  // Magenta, a size up from the base dots, white-outlined so it reads over
+  // both the imagery and an unfaded neighbour.
+  const HIT_SYMBOL = {
+    type: "simple-marker",
+    size: 11,
+    color: [255, 0, 255, 1],
+    outline: { color: [255, 255, 255, 1], width: 1.5 },
   };
 
-  // highlightOptions is view-global in ArcGIS 4.25 (per-layer came later), and
-  // user-layers highlights its own features relying on the default. So it is
-  // set only while a category is selected and put back on clear, which bounds
-  // the overlap to a deliberate selection the operator switched on.
-  const setHighlightOptions = () => {
-    if (savedHighlightOptions === undefined) {
-      savedHighlightOptions = mapView.highlightOptions;
+  // The ArcGIS API is already loaded by the connector by the time this plugin
+  // attaches (it waits for mapView), so pull modules off the AMD loader esri-
+  // loader installed rather than taking a dependency of our own.
+  const loadEsri = (modules) =>
+    new Promise((resolve, reject) => {
+      if (!window.require) return reject(new Error("ArcGIS API not loaded"));
+      window.require(modules, (...loaded) => resolve(loaded), reject);
+    });
+
+  // Hand the PAT to Esri rather than to the request, once. Needed only when
+  // the viewer is off-origin from the Manager; same-origin the session cookie
+  // travels with the layer's own requests and there is nothing to register.
+  const registerToken = async () => {
+    if (!config.token || tokenRegistered) return;
+    const [IdentityManager] = await loadEsri(["esri/identity/IdentityManager"]);
+    IdentityManager.registerToken({ server: v2Base, token: config.token });
+    tokenRegistered = true;
+  };
+
+  const removeHitLayer = () => {
+    if (!hitLayer) return;
+    try {
+      mapView.map.remove(hitLayer);
+    } catch {
+      /* map already torn down */
     }
-    mapView.highlightOptions = HIGHLIGHT;
+    hitLayer = null;
   };
 
-  const restoreHighlightOptions = () => {
-    if (savedHighlightOptions === undefined) return;
-    mapView.highlightOptions = savedHighlightOptions;
-    savedHighlightOptions = undefined;
-  };
-
-  const clearHighlight = () => {
-    if (highlightHandle) {
-      try {
-        highlightHandle.remove();
-      } catch {
-        /* layerView already gone */
-      }
-      highlightHandle = null;
-    }
-  };
-
-  // Two separate mechanisms, because they do different jobs:
+  // The hits get their OWN layer, drawn from the v2 service and filtered
+  // server-side by tags=.
   //
-  //   highlight()    marks the hits, in a colour independent of whatever the
-  //                  renderer gave them.
-  //   featureEffect  fades everything else, when asked.
+  // This is why, rather than marking features on the layer the map already
+  // draws: the connector thins that layer by zoom with
+  // `definitionExpression = "mod(id,N) = 0 AND ..."`, so at anything but close
+  // range most shots are not fetched at all. A sparse category — `book` on 1 of
+  // 18 — is then usually not on screen to mark, and the selection looks broken.
+  // A separate layer is not subject to that expression.
   //
-  // featureEffect still carries the fade rather than a renderer swap: it leaves
-  // the service's symbology alone and composes with the connector's
-  // zoom-thinning definitionExpression instead of competing with it.
-  const applyEffect = async (ids) => {
-    const layer = findShotsLayer();
-    if (!layer) {
-      console.warn("detection-tags: no shots layer on the map to recolour");
-      return;
-    }
+  // It also means no object-id list is shipped to the client, so there is no
+  // cap on how many shots a category may have, and nothing has to touch the
+  // view-global highlightOptions that user-layers relies on.
+  const applyEffect = async (field) => {
+    const base = findShotsLayer();
 
     // Synchronous before any await, so destroy() can rely on it completing.
-    clearHighlight();
-    if (!ids) {
-      layer.featureEffect = null;
-      restoreHighlightOptions();
-      return;
-    }
+    removeHitLayer();
+    if (base) base.opacity = field && fadeOthers ? 0.15 : 1;
+    if (!field) return;
 
-    layer.featureEffect = fadeOthers
-      ? { filter: { objectIds: ids }, excludedEffect: "opacity(12%) grayscale(100%)" }
-      : null;
+    const stamp = selected;
+    const [FeatureLayer] = await loadEsri(["esri/layers/FeatureLayer"]);
+    await registerToken();
+    // A second selection may have landed while the module loaded; that call
+    // owns the layer now.
+    if (selected !== stamp) return;
 
-    setHighlightOptions();
-    const token = selected;
-    const layerView = await mapView.whenLayerView(layer);
-    // A second selection may have landed while we waited; that call owns the
-    // highlight now, so drop this one rather than stacking handles.
-    if (selected !== token) return;
-    highlightHandle = layerView.highlight(ids);
+    hitLayer = new FeatureLayer({
+      url: `${v2Base}${SHOT_LAYER_SUFFIX}`,
+      // No token here: Esri strips `token` from customParameters because it
+      // manages credentials itself, which silently 403s the layer's own
+      // metadata request. It goes through IdentityManager instead.
+      customParameters: { tags: field },
+      outFields: [],
+      popupEnabled: false,
+      legendEnabled: false,
+      listMode: "hide", // not a layer the operator manages; keep it out of LayerList
+      renderer: { type: "simple", symbol: HIT_SYMBOL },
+    });
+    mapView.map.add(hitLayer);
   };
 
   // --- UI ------------------------------------------------------------------
@@ -247,7 +244,7 @@ export const detectionTags = function (config = {}) {
     render();
 
     try {
-      await applyEffect(await idsFor(category.field));
+      await applyEffect(category.field);
     } catch (e) {
       console.warn("detection-tags: could not select", category.field, e);
       selected = null;
@@ -335,13 +332,12 @@ export const detectionTags = function (config = {}) {
     const foot = node("LABEL", { class: "gdt-foot" });
     fadeInput = node("INPUT", { type: "checkbox" });
     fadeInput.checked = fadeOthers;
-    fadeInput.addEventListener("change", async () => {
+    fadeInput.addEventListener("change", () => {
       fadeOthers = fadeInput.checked;
-      // Re-apply rather than re-query: the selection has not changed.
-      if (selected) {
-        const current = categories.find((c) => c.field === selected);
-        if (current) await applyEffect(await idsFor(current.field));
-      }
+      // Only the base layer's opacity changes; the hit layer is untouched, so
+      // there is nothing to re-fetch and no need to rebuild it.
+      const base = findShotsLayer();
+      if (base) base.opacity = selected && fadeOthers ? 0.15 : 1;
     });
     foot.appendChild(fadeInput);
     foot.appendChild(node("SPAN", {}, "fade the rest"));
