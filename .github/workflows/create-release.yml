@@ -1,0 +1,85 @@
+name: Create Release Tag
+
+on:
+  push:
+    branches:
+      - main
+      - preview
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Extract version from package.json
+        id: package_version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Classify prerelease vs stable (branch-aware)
+        id: classify
+        run: |
+          VERSION="${{ steps.package_version.outputs.VERSION }}"
+          BRANCH="${GITHUB_REF_NAME}"
+
+          # If on preview branch, force prerelease + not latest.
+          if [[ "$BRANCH" == "preview" ]]; then
+            echo "PRERELEASE=true"  >> "$GITHUB_OUTPUT"
+            echo "MAKE_LATEST=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "PRERELEASE=false"  >> "$GITHUB_OUTPUT"
+            echo "MAKE_LATEST=true"  >> "$GITHUB_OUTPUT"
+          fi
+
+          # Use the version exactly as the tag (no 'v' prefix)
+          echo "TAG=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Check if tag exists
+        id: check_tag
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const tag = '${{ steps.classify.outputs.TAG }}';
+            try {
+              await github.rest.git.getRef({ owner, repo, ref: `tags/${tag}` });
+              core.setOutput('exists', 'true');
+            } catch {
+              core.setOutput('exists', 'false');
+            }
+
+      - name: Create GitHub release
+        if: steps.check_tag.outputs.exists == 'false'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const tag_name = '${{ steps.classify.outputs.TAG }}';
+            const name = `Release ${tag_name}`;
+            const body = `Automated release for ${repo} ${tag_name}`;
+            const prerelease = ${{ steps.classify.outputs.PRERELEASE }};
+            const make_latest = '${{ steps.classify.outputs.MAKE_LATEST }}'; // "true" | "false" | "legacy"
+
+            await github.rest.repos.createRelease({
+              owner,
+              repo,
+              tag_name,
+              name,
+              body,
+              draft: false,
+              prerelease,
+              make_latest,
+              target_commitish: context.sha
+            });
+          result-encoding: string
