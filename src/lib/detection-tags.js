@@ -288,22 +288,37 @@ export const detectionTags = function (config = {}) {
 
   // --- lifecycle -----------------------------------------------------------
 
+  // Every path that ends in "no widget" says so. A plugin that renders nothing
+  // and explains nothing cannot be debugged from the outside, and all of the
+  // reasons here are legitimate states rather than faults.
+  const quiet = (reason) => {
+    console.info(`detection-tags: not shown — ${reason}`);
+  };
+
   this.init = async function (geocamViewer) {
     viewer = geocamViewer;
 
     try {
       v2Base = await resolveV2Base();
-      if (!v2Base) return; // nothing advertised — older Manager, or no pointer
+      if (!v2Base) {
+        return quiet(
+          config.connectorSrc
+            ? `no geocam.v2Path advertised by ${config.connectorSrc} (Manager too old?)`
+            : "no src attribute and no arcgis connector src to discover one from"
+        );
+      }
+      console.debug("detection-tags: using", v2Base);
       categories = await loadCategories();
     } catch (e) {
-      // No widget rather than a broken one. The honest cases all land here: a
-      // cell that was never segmented, a Manager too old to advertise its v2
-      // service, and an embedded viewer with no credential for it.
-      console.info("detection-tags: no categories available", e.message);
-      return;
+      // The honest cases all land here: a cell that was never segmented, a
+      // Manager too old to advertise its v2 service, and an embedded viewer
+      // with no credential for it.
+      return quiet(`${v2Base || config.connectorSrc} — ${e.message}`);
     }
 
-    if (!categories.length) return;
+    if (!categories.length) {
+      return quiet(`no tag_* fields on ${v2Base}/0 — cell not segmented?`);
+    }
 
     button = node("DIV", {
       class: "geocam-detection-tags-button geocam-viewer-control-button",
@@ -315,6 +330,11 @@ export const detectionTags = function (config = {}) {
     viewer.addControl(button, "right-top");
     viewer.addControl(buildPanel(), "right-top");
     render();
+    console.info(
+      `detection-tags: ${categories.length} categories, shot total ${
+        shotCount === null ? "unknown" : shotCount
+      } — button added to right-top`
+    );
   };
 
   this.destroy = function () {

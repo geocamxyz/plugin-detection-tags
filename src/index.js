@@ -33,12 +33,25 @@ export class GeocamViewerDetectionTags extends HTMLElement {
       return;
     }
 
+    // The connector publishes `.mapView` only once geocam-map has built the
+    // Esri view and called connector.link(). Until then there is nothing to
+    // attach to. Warn once if that never happens rather than poll in silence.
+    let waited = 0;
+    const warnAfterMs = 8000;
+
     const attach = () => {
       const viewer = host.viewer;
       const connector = host.querySelector(
         "geocam-viewer-arcgis-map, geocam-viewer-arcgis-scene"
       );
       const mapView = connector && connector.mapView;
+
+      if (waited === warnAfterMs) {
+        console.warn(
+          "detection-tags: still waiting to attach after 8s —",
+          `viewer: ${!!viewer}, connector: ${!!connector}, mapView: ${!!mapView}`
+        );
+      }
 
       if (viewer && typeof viewer.plugin === "function" && mapView) {
         if (this.plugin) return;
@@ -56,6 +69,7 @@ export class GeocamViewerDetectionTags extends HTMLElement {
         });
         this.viewer.plugin(this.plugin);
       } else {
+        waited += 100;
         setTimeout(attach, 100);
       }
     };
