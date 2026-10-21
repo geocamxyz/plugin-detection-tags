@@ -1,15 +1,15 @@
-const a = (o, n = {}, s = "") => {
-  const r = document.createElement(o);
-  for (let c in n)
-    r.setAttribute(c, n[c]);
-  return r.innerHTML = s, r;
-}, F = (o, n) => {
-  if (!document.getElementById(o)) {
-    const s = a("STYLE", { type: "text/css", id: o }, n);
-    document.getElementsByTagName("head")[0].prepend(s);
+const s = (i, n = {}, d = "") => {
+  const l = document.createElement(i);
+  for (let u in n)
+    l.setAttribute(u, n[u]);
+  return l.innerHTML = d, l;
+}, U = (i, n) => {
+  if (!document.getElementById(i)) {
+    const d = s("STYLE", { type: "text/css", id: i }, n);
+    document.getElementsByTagName("head")[0].prepend(d);
   }
   return !0;
-}, N = `
+}, j = `
   .gdt-container { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
   .gdt-panel { width: 240px; max-height: 60vh; overflow-y: auto; font: 13px/1.4 system-ui, sans-serif;
     color: #1f2328; background: #fff; border: 1px solid rgba(15,16,6,.1); border-radius: 14px;
@@ -34,28 +34,28 @@ const a = (o, n = {}, s = "") => {
   .gdt-note { margin-top: 6px; font-size: 11px; color: rgba(31,35,40,.5); }
   .geocam-detection-tags-button { background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8V5a2 2 0 0 1 2-2h3"/><path d="M16 3h3a2 2 0 0 1 2 2v3"/><path d="M21 16v3a2 2 0 0 1-2 2h-3"/><path d="M8 21H5a2 2 0 0 1-2-2v-3"/><circle cx="12" cy="12" r="3"/></svg>'); }
 `;
-const O = function(o = {}) {
-  let n, s, r, c, d, u;
-  const g = o.mapView;
-  let m = null, b = [], w = null, h = null, $ = !0, x = null;
-  F("geocam-detection-tags", N);
-  const I = (e, t = {}) => {
-    const i = new URLSearchParams({ f: "json", ...t });
-    return o.token && i.set("token", o.token), `${e}?${i}`;
-  }, E = async (e, t = {}) => {
-    const p = await (await fetch(I(e, t), {
+const R = function(i = {}) {
+  let n, d, l, u, g, h;
+  const r = i.mapView;
+  let m = null, y = [], w = null, p = null, E = !0, x = null, S = null, b;
+  U("geocam-detection-tags", j);
+  const O = (e, t = {}) => {
+    const o = new URLSearchParams({ f: "json", ...t });
+    return i.token && o.set("token", i.token), `${e}?${o}`;
+  }, k = async (e, t = {}) => {
+    const c = await (await fetch(O(e, t), {
       credentials: "same-origin"
     })).json();
-    if (p && p.error)
-      throw new Error(`${p.error.code}: ${p.error.message}`);
-    return p;
+    if (c && c.error)
+      throw new Error(`${c.error.code}: ${c.error.message}`);
+    return c;
   }, V = async () => {
-    if (o.src) return o.src.replace(/\/+$/, "");
-    if (!o.connectorSrc) return null;
-    const e = o.connectorSrc.replace(/\/+$/, ""), t = await E(e), i = t && t.geocam && t.geocam.v2Path;
-    return i ? new URL(i, e).href : null;
+    if (i.src) return i.src.replace(/\/+$/, "");
+    if (!i.connectorSrc) return null;
+    const e = i.connectorSrc.replace(/\/+$/, ""), t = await k(e), o = t && t.geocam && t.geocam.v2Path;
+    return o ? new URL(o, e).href : null;
   }, _ = async () => {
-    const e = await E(`${m}/0`);
+    const e = await k(`${m}/0`);
     return w = typeof e.geocamShotCount == "number" ? e.geocamShotCount : null, (e.fields || []).filter((t) => t.name && t.name.startsWith("tag_")).map((t) => ({
       field: t.name,
       label: t.alias || t.name.replace(/^tag_/, ""),
@@ -63,109 +63,124 @@ const O = function(o = {}) {
       // recorded. Keep the distinction: unknown is not "no shots".
       count: typeof t.count == "number" ? t.count : null
     }));
-  }, L = async (e) => (await E(`${m}/0/query`, {
+  }, A = async (e) => (await k(`${m}/0/query`, {
     tags: e,
     returnIdsOnly: "true"
   })).objectIds || [], D = () => {
     if (x) return x;
-    const e = g && g.map && g.map.allLayers || [];
+    const e = r && r.map && r.map.allLayers || [];
     return x = (e.toArray ? e.toArray() : Array.from(e)).find(
-      (i) => i.type === "feature" && i.layerId === 0
+      (o) => o.type === "feature" && o.layerId === 0
     ), x;
-  }, y = (e) => {
+  }, F = {
+    color: [255, 0, 255],
+    haloColor: [255, 0, 255],
+    haloOpacity: 1,
+    fillOpacity: 0.9
+  }, N = () => {
+    b === void 0 && (b = r.highlightOptions), r.highlightOptions = F;
+  }, B = () => {
+    b !== void 0 && (r.highlightOptions = b, b = void 0);
+  }, M = () => {
+    if (S) {
+      try {
+        S.remove();
+      } catch {
+      }
+      S = null;
+    }
+  }, v = async (e) => {
     const t = D();
     if (!t) {
       console.warn("detection-tags: no shots layer on the map to recolour");
       return;
     }
-    if (!e) {
-      t.featureEffect = null;
+    if (M(), !e) {
+      t.featureEffect = null, B();
       return;
     }
-    t.featureEffect = {
-      filter: { objectIds: e },
-      includedEffect: "drop-shadow(0 0 6px #ff00ff) saturate(300%)",
-      excludedEffect: $ ? "opacity(12%) grayscale(100%)" : null
-    };
-  }, A = async (e) => {
-    if (!e || h === e.field) {
-      h = null, y(null), v();
+    t.featureEffect = E ? { filter: { objectIds: e }, excludedEffect: "opacity(12%) grayscale(100%)" } : null, N();
+    const o = p, c = await r.whenLayerView(t);
+    p === o && (S = c.highlight(e));
+  }, I = async (e) => {
+    if (!e || p === e.field) {
+      p = null, v(null), $();
       return;
     }
-    h = e.field, v();
+    p = e.field, $();
     try {
-      y(await L(e.field));
+      await v(await A(e.field));
     } catch (t) {
-      console.warn("detection-tags: could not select", e.field, t), h = null, y(null), v();
+      console.warn("detection-tags: could not select", e.field, t), p = null, v(null), $();
     }
-  }, T = (e) => e.count !== null && w !== null && e.count >= w, v = () => {
-    c.innerHTML = "";
-    const e = [...b].sort((l, f) => l.count === f.count ? l.label.localeCompare(f.label) : l.count === null ? 1 : f.count === null ? -1 : l.count - f.count), t = o.hideFullCoverage ? e.filter((l) => !T(l)) : e;
-    t.forEach((l) => {
-      const f = T(l), k = ["gdt-li"];
-      h === l.field && k.push("active"), f && k.push("gdt-full");
-      const S = a("BUTTON", {
-        class: k.join(" "),
+  }, H = (e) => e.count !== null && w !== null && e.count >= w, $ = () => {
+    u.innerHTML = "";
+    const e = [...y].sort((a, f) => a.count === f.count ? a.label.localeCompare(f.label) : a.count === null ? 1 : f.count === null ? -1 : a.count - f.count), t = i.hideFullCoverage ? e.filter((a) => !H(a)) : e;
+    t.forEach((a) => {
+      const f = H(a), T = ["gdt-li"];
+      p === a.field && T.push("active"), f && T.push("gdt-full");
+      const C = s("BUTTON", {
+        class: T.join(" "),
         type: "button",
         // Selecting a category every shot carries would recolour the lot,
         // which tells you nothing — so say so rather than let it look broken.
-        title: f ? `Every shot has ${l.label}, so highlighting it would select them all` : `Highlight shots containing ${l.label}`
+        title: f ? `Every shot has ${a.label}, so highlighting it would select them all` : `Highlight shots containing ${a.label}`
       });
-      S.appendChild(a("SPAN", { class: "gdt-name" }, l.label)), S.appendChild(
-        a(
+      C.appendChild(s("SPAN", { class: "gdt-name" }, a.label)), C.appendChild(
+        s(
           "SPAN",
           { class: "gdt-count" },
-          l.count === null ? "&ndash;" : `${l.count}${w ? ` / ${w}` : ""}`
+          a.count === null ? "&ndash;" : `${a.count}${w ? ` / ${w}` : ""}`
         )
-      ), f || S.addEventListener("click", () => A(l)), c.appendChild(S);
-    }), d.disabled = !h;
-    const i = e.length - t.length, p = r.querySelector(".gdt-note");
-    p && p.remove(), i > 0 && r.appendChild(
-      a(
+      ), f || C.addEventListener("click", () => I(a)), u.appendChild(C);
+    }), g.disabled = !p;
+    const o = e.length - t.length, c = l.querySelector(".gdt-note");
+    c && c.remove(), o > 0 && l.appendChild(
+      s(
         "DIV",
         { class: "gdt-note" },
-        `${i} categor${i === 1 ? "y" : "ies"} on every shot, hidden`
+        `${o} categor${o === 1 ? "y" : "ies"} on every shot, hidden`
       )
     );
-  }, H = () => {
-    r = a("DIV", { class: "gdt-panel", hidden: "hidden" });
-    const e = a("DIV", { class: "gdt-h" });
-    e.appendChild(a("SPAN", {}, "Detections")), d = a("BUTTON", { class: "gdt-clear", type: "button" }, "clear"), d.disabled = !0, d.addEventListener("click", () => A(null)), e.appendChild(d), r.appendChild(e), c = a("UL", { class: "gdt-list" }), r.appendChild(c);
-    const t = a("LABEL", { class: "gdt-foot" });
-    return u = a("INPUT", { type: "checkbox" }), u.checked = $, u.addEventListener("change", async () => {
-      if ($ = u.checked, h) {
-        const i = b.find((p) => p.field === h);
-        i && y(await L(i.field));
+  }, P = () => {
+    l = s("DIV", { class: "gdt-panel", hidden: "hidden" });
+    const e = s("DIV", { class: "gdt-h" });
+    e.appendChild(s("SPAN", {}, "Detections")), g = s("BUTTON", { class: "gdt-clear", type: "button" }, "clear"), g.disabled = !0, g.addEventListener("click", () => I(null)), e.appendChild(g), l.appendChild(e), u = s("UL", { class: "gdt-list" }), l.appendChild(u);
+    const t = s("LABEL", { class: "gdt-foot" });
+    return h = s("INPUT", { type: "checkbox" }), h.checked = E, h.addEventListener("change", async () => {
+      if (E = h.checked, p) {
+        const o = y.find((c) => c.field === p);
+        o && await v(await A(o.field));
       }
-    }), t.appendChild(u), t.appendChild(a("SPAN", {}, "fade the rest")), r.appendChild(t), r;
-  }, C = (e) => {
+    }), t.appendChild(h), t.appendChild(s("SPAN", {}, "fade the rest")), l.appendChild(t), l;
+  }, L = (e) => {
     console.info(`detection-tags: not shown — ${e}`);
   };
   this.init = async function(e) {
     try {
       if (m = await V(), !m)
-        return C(
-          o.connectorSrc ? `no geocam.v2Path advertised by ${o.connectorSrc} (Manager too old?)` : "no src attribute and no arcgis connector src to discover one from"
+        return L(
+          i.connectorSrc ? `no geocam.v2Path advertised by ${i.connectorSrc} (Manager too old?)` : "no src attribute and no arcgis connector src to discover one from"
         );
-      console.debug("detection-tags: using", m), b = await _();
+      console.debug("detection-tags: using", m), y = await _();
     } catch (t) {
-      return C(`${m || o.connectorSrc} — ${t.message}`);
+      return L(`${m || i.connectorSrc} — ${t.message}`);
     }
-    if (!b.length)
-      return C(`no tag_* fields on ${m}/0 — cell not segmented?`);
-    s = a("DIV", {
+    if (!y.length)
+      return L(`no tag_* fields on ${m}/0 — cell not segmented?`);
+    d = s("DIV", {
       class: "geocam-detection-tags-button geocam-viewer-control-button",
       title: "Detections found in this cell"
-    }), s.addEventListener("click", () => {
-      r.hidden = !r.hidden;
-    }), n = a("DIV", { class: "gdt-container" }), n.appendChild(s), n.appendChild(H()), g.ui.add(n, "top-right"), v(), console.info(
-      `detection-tags: ${b.length} categories, shot total ${w === null ? "unknown" : w} — button added to right-top`
+    }), d.addEventListener("click", () => {
+      l.hidden = !l.hidden;
+    }), n = s("DIV", { class: "gdt-container" }), n.appendChild(d), n.appendChild(P()), r.ui.add(n, "top-right"), $(), console.info(
+      `detection-tags: ${y.length} categories, shot total ${w === null ? "unknown" : w} — button added to right-top`
     );
   }, this.destroy = function() {
-    y(null), n && (g && g.ui && g.ui.remove(n), n.parentNode && n.parentNode.removeChild(n)), n = s = r = c = d = u = null;
+    v(null), n && (r && r.ui && r.ui.remove(n), n.parentNode && n.parentNode.removeChild(n)), n = d = l = u = g = h = null;
   };
 };
-class B extends HTMLElement {
+class Y extends HTMLElement {
   constructor() {
     super(), this.plugin = null, this.viewer = null;
   }
@@ -175,31 +190,31 @@ class B extends HTMLElement {
       console.error("GeocamViewerDetectionTags must be a child of GeocamViewer");
       return;
     }
-    let s = 0;
-    const r = 8e3, c = () => {
-      const d = n.viewer, u = n.querySelector(
+    let d = 0;
+    const l = 8e3, u = () => {
+      const g = n.viewer, h = n.querySelector(
         "geocam-viewer-arcgis-map, geocam-viewer-arcgis-scene"
-      ), g = u && u.mapView;
-      if (s === r && console.warn(
+      ), r = h && h.mapView;
+      if (d === l && console.warn(
         "detection-tags: still waiting to attach after 8s —",
-        `viewer: ${!!d}, connector: ${!!u}, mapView: ${!!g}`
-      ), d && typeof d.plugin == "function" && g) {
+        `viewer: ${!!g}, connector: ${!!h}, mapView: ${!!r}`
+      ), g && typeof g.plugin == "function" && r) {
         if (this.plugin) return;
-        this.viewer = d, this.plugin = new O({
-          mapView: g,
+        this.viewer = g, this.plugin = new R({
+          mapView: r,
           src: this.getAttribute("src"),
           // What the map is drawing. Only used to discover the v2 service when
           // `src` was not given.
-          connectorSrc: u.getAttribute("src"),
+          connectorSrc: h.getAttribute("src"),
           token: this.getAttribute("token"),
           // Default is to list every category and disable the ones at full
           // coverage rather than hide them — see the README.
           hideFullCoverage: this.hasAttribute("hide-full-coverage")
         }), this.viewer.plugin(this.plugin);
       } else
-        s += 100, setTimeout(c, 100);
+        d += 100, setTimeout(u, 100);
     };
-    c();
+    u();
   }
   disconnectedCallback() {
     this.plugin && typeof this.plugin.destroy == "function" && this.plugin.destroy(), this.plugin = null, this.viewer = null;
@@ -207,8 +222,8 @@ class B extends HTMLElement {
 }
 window.customElements.define(
   "geocam-viewer-detection-tags",
-  B
+  Y
 );
 export {
-  B as GeocamViewerDetectionTags
+  Y as GeocamViewerDetectionTags
 };

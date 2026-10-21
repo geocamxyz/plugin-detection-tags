@@ -65,25 +65,37 @@ map layer, so it belongs with the map's controls.
 
 ## How the recolouring works
 
-It sets `featureEffect` on the shots layer rather than replacing the renderer:
+Two mechanisms, doing two different jobs.
+
+**`layerView.highlight(ids)`** marks the hits — a magenta halo, in a colour
+independent of whatever the renderer gave the shot. A CSS filter cannot do this
+job: the service renders shots with a **unique-value** renderer, so their base
+colours already differ and `saturate()` / `hue-rotate()` shift each one
+somewhere different rather than landing them all on one obvious colour. That is
+why `includedEffect` was dropped — against unfaded neighbours it was nearly
+invisible.
+
+**`featureEffect`** fades everything else, and only when "fade the rest" is on:
 
 ```js
-layer.featureEffect = {
-  filter: { objectIds: ids },
-  includedEffect: "drop-shadow(0 0 6px #ff00ff) saturate(300%)",
-  excludedEffect: "opacity(12%) grayscale(100%)",   // "fade the rest"
-};
+layer.featureEffect = { filter: { objectIds: ids }, excludedEffect: "opacity(12%) grayscale(100%)" };
 ```
 
-Three reasons over a `uniqueValue` renderer:
+The fade stays a `featureEffect` rather than a renderer swap because it leaves
+the service's symbology alone (assigning a renderer overrides it — see the note
+in `user-layers`) and composes with the connector's zoom-thinning
+`definitionExpression` instead of competing for the same property.
 
-- it leaves the service's own symbology alone (assigning a renderer overrides
-  it — see the note in `user-layers`);
-- it composes with the connector's zoom-thinning `definitionExpression` rather
-  than competing for the same property;
-- `excludedEffect` gives show-only-the-hits without a second query or a filter.
+### A caveat on `highlightOptions`
 
-Requires ArcGIS JS **4.22+** for `featureEffect`; the connector loads 4.25.
+`highlightOptions` is **view-global** in ArcGIS 4.25 (per-layer arrived later),
+and `user-layers` highlights its own features relying on the default colour. So
+this plugin installs its magenta options only while a category is selected and
+restores the previous value on clear — bounding the overlap to a selection the
+operator deliberately switched on. If both are active at once, a user-layer
+feature highlight will also be magenta until the category is cleared.
+
+Requires ArcGIS JS **4.22+** for `featureEffect`; the connector loads 4.25/4.26.
 
 ## Known limits
 

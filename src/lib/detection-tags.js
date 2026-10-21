@@ -67,6 +67,8 @@ export const detectionTags = function (config = {}) {
   let selected = null; // field name of the active category, or null
   let fadeOthers = true;
   let shotsLayer = null;
+  let highlightHandle = null;
+  let savedHighlightOptions; // undefined = ours is not currently installed
 
   injectStyle("geocam-detection-tags", STYLES);
 
@@ -155,26 +157,80 @@ export const detectionTags = function (config = {}) {
     return shotsLayer;
   };
 
-  // featureEffect rather than swapping the renderer: it leaves the service's
-  // own symbology alone, and it composes with the connector's zoom-thinning
-  // definitionExpression instead of competing with it.
-  const applyEffect = (ids) => {
+  // The halo drawn over selected shots. A CSS filter cannot do this job: the
+  // service renders shots with a unique-value renderer, so their base colours
+  // already differ, and saturate()/hue-rotate() shift each one differently
+  // rather than landing them all on one obvious colour.
+  const HIGHLIGHT = {
+    color: [255, 0, 255],
+    haloColor: [255, 0, 255],
+    haloOpacity: 1,
+    fillOpacity: 0.9,
+  };
+
+  // highlightOptions is view-global in ArcGIS 4.25 (per-layer came later), and
+  // user-layers highlights its own features relying on the default. So it is
+  // set only while a category is selected and put back on clear, which bounds
+  // the overlap to a deliberate selection the operator switched on.
+  const setHighlightOptions = () => {
+    if (savedHighlightOptions === undefined) {
+      savedHighlightOptions = mapView.highlightOptions;
+    }
+    mapView.highlightOptions = HIGHLIGHT;
+  };
+
+  const restoreHighlightOptions = () => {
+    if (savedHighlightOptions === undefined) return;
+    mapView.highlightOptions = savedHighlightOptions;
+    savedHighlightOptions = undefined;
+  };
+
+  const clearHighlight = () => {
+    if (highlightHandle) {
+      try {
+        highlightHandle.remove();
+      } catch {
+        /* layerView already gone */
+      }
+      highlightHandle = null;
+    }
+  };
+
+  // Two separate mechanisms, because they do different jobs:
+  //
+  //   highlight()    marks the hits, in a colour independent of whatever the
+  //                  renderer gave them.
+  //   featureEffect  fades everything else, when asked.
+  //
+  // featureEffect still carries the fade rather than a renderer swap: it leaves
+  // the service's symbology alone and composes with the connector's
+  // zoom-thinning definitionExpression instead of competing with it.
+  const applyEffect = async (ids) => {
     const layer = findShotsLayer();
     if (!layer) {
       console.warn("detection-tags: no shots layer on the map to recolour");
       return;
     }
 
+    // Synchronous before any await, so destroy() can rely on it completing.
+    clearHighlight();
     if (!ids) {
       layer.featureEffect = null;
+      restoreHighlightOptions();
       return;
     }
 
-    layer.featureEffect = {
-      filter: { objectIds: ids },
-      includedEffect: "drop-shadow(0 0 6px #ff00ff) saturate(300%)",
-      excludedEffect: fadeOthers ? "opacity(12%) grayscale(100%)" : null,
-    };
+    layer.featureEffect = fadeOthers
+      ? { filter: { objectIds: ids }, excludedEffect: "opacity(12%) grayscale(100%)" }
+      : null;
+
+    setHighlightOptions();
+    const token = selected;
+    const layerView = await mapView.whenLayerView(layer);
+    // A second selection may have landed while we waited; that call owns the
+    // highlight now, so drop this one rather than stacking handles.
+    if (selected !== token) return;
+    highlightHandle = layerView.highlight(ids);
   };
 
   // --- UI ------------------------------------------------------------------
@@ -191,7 +247,7 @@ export const detectionTags = function (config = {}) {
     render();
 
     try {
-      applyEffect(await idsFor(category.field));
+      await applyEffect(await idsFor(category.field));
     } catch (e) {
       console.warn("detection-tags: could not select", category.field, e);
       selected = null;
@@ -284,7 +340,7 @@ export const detectionTags = function (config = {}) {
       // Re-apply rather than re-query: the selection has not changed.
       if (selected) {
         const current = categories.find((c) => c.field === selected);
-        if (current) applyEffect(await idsFor(current.field));
+        if (current) await applyEffect(await idsFor(current.field));
       }
     });
     foot.appendChild(fadeInput);
