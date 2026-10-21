@@ -1,0 +1,13 @@
+{
+  "name": "detection-tags",
+  "private": true,
+  "version": "2.4.9",
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite build --watch"
+  },
+  "devDependencies": {
+    "vite": "^4.0.4"
+  }
+}
