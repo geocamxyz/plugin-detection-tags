@@ -3,13 +3,13 @@ const s = (o, r = {}, d = "") => {
   for (let u in r)
     i.setAttribute(u, r[u]);
   return i.innerHTML = d, i;
-}, B = (o, r) => {
+}, R = (o, r) => {
   if (!document.getElementById(o)) {
     const d = s("STYLE", { type: "text/css", id: o }, r);
     document.getElementsByTagName("head")[0].prepend(d);
   }
   return !0;
-}, N = `
+}, B = `
   .gdt-container { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
   .gdt-panel { width: 240px; max-height: 60vh; overflow-y: auto; font: 13px/1.4 system-ui, sans-serif;
     color: #1f2328; background: #fff; border: 1px solid rgba(15,16,6,.1); border-radius: 14px;
@@ -40,11 +40,11 @@ const s = (o, r = {}, d = "") => {
   .geocam-detection-tags-button.gdt-off { opacity: .4; cursor: default; }
   .geocam-detection-tags-button { background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8V5a2 2 0 0 1 2-2h3"/><path d="M16 3h3a2 2 0 0 1 2 2v3"/><path d="M21 16v3a2 2 0 0 1-2 2h-3"/><path d="M8 21H5a2 2 0 0 1-2-2v-3"/><circle cx="12" cy="12" r="3"/></svg>'); }
 `;
-const R = function(o = {}) {
+const N = function(o = {}) {
   let r, d, i, u, p, g;
   const l = o.mapView;
   let f = null, y = [], w = null, h = null, v = !0, x = null, b = null, E = !1;
-  B("geocam-detection-tags", N);
+  R("geocam-detection-tags", B);
   const F = (e, t = {}) => {
     const n = new URLSearchParams({ f: "json", ...t });
     return o.token && n.set("token", o.token), `${e}?${n}`;
@@ -58,7 +58,7 @@ const R = function(o = {}) {
   }, H = async () => {
     if (o.src) return o.src.replace(/\/+$/, "");
     if (!o.connectorSrc) return null;
-    const e = o.connectorSrc.replace(/\/+$/, ""), t = await C(e), n = t && t.geocam && t.geocam.v2Path;
+    const e = new URL(o.connectorSrc.replace(/\/+$/, ""), window.location.href).href, t = await C(e), n = t && t.geocam && t.geocam.v2Path;
     return n ? new URL(n, e).href : null;
   }, M = async () => {
     const e = await C(`${f}/0`);
@@ -87,7 +87,7 @@ const R = function(o = {}) {
     if (!o.token || E) return;
     const [e] = await A(["esri/identity/IdentityManager"]);
     e.registerToken({ server: f, token: o.token }), E = !0;
-  }, O = () => {
+  }, U = () => {
     if (b) {
       try {
         l.map.remove(b);
@@ -97,7 +97,7 @@ const R = function(o = {}) {
     }
   }, k = async (e) => {
     const t = T();
-    if (O(), t && (t.opacity = e && v ? 0.15 : 1), !e) return;
+    if (U(), t && (t.opacity = e && v ? 0.15 : 1), !e) return;
     const n = h, [c] = await A(["esri/layers/FeatureLayer"]);
     await P(), h === n && (b = new c({
       url: `${f}/0`,
@@ -152,7 +152,7 @@ const R = function(o = {}) {
         `${n} categor${n === 1 ? "y" : "ies"} on every shot, hidden`
       )
     );
-  }, U = () => {
+  }, O = () => {
     i = s("DIV", { class: "gdt-panel", hidden: "hidden" });
     const e = s("DIV", { class: "gdt-h" });
     e.appendChild(s("SPAN", {}, "Detections")), p = s("BUTTON", { class: "gdt-clear", type: "button" }, "clear"), p.disabled = !0, p.addEventListener("click", () => I(null)), e.appendChild(p), i.appendChild(e), u = s("UL", { class: "gdt-list" }), i.appendChild(u);
@@ -182,7 +182,7 @@ const R = function(o = {}) {
       title: t ? "Segmentations or summary not completed" : "Detections found in this cell"
     }), t || d.addEventListener("click", () => {
       i.hidden = !i.hidden;
-    }), r = s("DIV", { class: "gdt-container" }), r.appendChild(d), t || (r.appendChild(U()), S()), l.ui.add(r, "top-right"), console.info(
+    }), r = s("DIV", { class: "gdt-container" }), r.appendChild(d), t || (r.appendChild(O()), S()), l.ui.add(r, "top-right"), console.info(
       `detection-tags: ${y.length} categories, shot total ${w === null ? "unknown" : w} — button added to the map UI${t ? " (disabled)" : ""}`
     );
   }, this.destroy = function() {
@@ -209,7 +209,7 @@ class Y extends HTMLElement {
         `viewer: ${!!p}, connector: ${!!g}, mapView: ${!!l}`
       ), p && typeof p.plugin == "function" && l) {
         if (this.plugin) return;
-        this.viewer = p, this.plugin = new R({
+        this.viewer = p, this.plugin = new N({
           mapView: l,
           src: this.getAttribute("src"),
           // What the map is drawing. Only used to discover the v2 service when

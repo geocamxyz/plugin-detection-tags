@@ -108,7 +108,12 @@ export const detectionTags = function (config = {}) {
     if (config.src) return config.src.replace(/\/+$/, "");
     if (!config.connectorSrc) return null;
 
-    const legacy = config.connectorSrc.replace(/\/+$/, "");
+    // Anchored on the document first. The connector's src is root-relative
+    // when the viewer is served by the Manager itself
+    // ("/arcgis/rest/services/cell+slug/FeatureServer"), and new URL() throws
+    // TypeError on a relative base — which the catch upstream would swallow
+    // into a silent "not shown".
+    const legacy = new URL(config.connectorSrc.replace(/\/+$/, ""), window.location.href).href;
     const root = await fetchJson(legacy);
     const path = root && root.geocam && root.geocam.v2Path;
     if (!path) return null;
