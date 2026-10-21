@@ -38,6 +38,12 @@ const STYLES = `
   .gdt-foot { margin-top: 8px; padding-top: 7px; border-top: 1px solid rgba(15,16,6,.08);
     display: flex; align-items: center; gap: 6px; font-size: 12px; }
   .gdt-note { margin-top: 6px; font-size: 11px; color: rgba(31,35,40,.5); }
+  /* esri-widget--button supplies the white background, size and hover; this
+     only adds the glyph. background-size/position are set because the class
+     expects an icon font child rather than a background image. */
+  .geocam-detection-tags-button { background-repeat: no-repeat; background-position: center;
+    background-size: 18px 18px; cursor: pointer; }
+  .geocam-detection-tags-button.gdt-off { opacity: .4; cursor: default; }
   .geocam-detection-tags-button { background-image: url('data:image/svg+xml;utf8,\
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2"\
  stroke-linecap="round" stroke-linejoin="round"><path d="M3 8V5a2 2 0 0 1 2-2h3"/>\
@@ -370,23 +376,43 @@ export const detectionTags = function (config = {}) {
       console.debug("detection-tags: using", v2Base);
       categories = await loadCategories();
     } catch (e) {
-      // The honest cases all land here: a cell that was never segmented, a
-      // Manager too old to advertise its v2 service, and an embedded viewer
-      // with no credential for it.
+      // Could not reach or resolve the service. NOT the same as "no
+      // detections" — we have learned nothing about whether segmentation ran,
+      // so say nothing rather than claim it did not. Covers a Manager too old
+      // to advertise its v2 service and an embedded viewer with no credential.
       return quiet(`${v2Base || config.connectorSrc} — ${e.message}`);
     }
 
-    if (!categories.length) {
-      return quiet(`no tag_* fields on ${v2Base}/0 — cell not segmented?`);
+    // The service answered and declared no categories: segmentation, or the
+    // summary step, has not run for this cell. That is worth showing as a
+    // disabled control rather than an absent one — an operator looking for the
+    // button learns why it is empty instead of wondering where it went.
+    const disabled = categories.length === 0;
+    if (disabled) {
+      console.info(`detection-tags: no tag_* fields on ${v2Base}${SHOT_LAYER_SUFFIX} — showing disabled`);
     }
 
+    // esri-widget--button, not the viewer's control-button class. The latter is
+    // styled for the viewer's chrome over imagery — rgba(255,255,255,.5), which
+    // among Esri's solid-white widget buttons reads as a disabled control.
+    // Taking Esri's own class matches the stack it now sits in, and keeps
+    // matching if their theme changes.
     button = node("DIV", {
-      class: "geocam-detection-tags-button geocam-viewer-control-button",
-      title: "Detections found in this cell",
+      class: `geocam-detection-tags-button esri-widget--button${disabled ? " gdt-off" : ""}`,
+      role: "button",
+      title: disabled
+        ? "Segmentations or summary not completed"
+        : "Detections found in this cell",
     });
-    button.addEventListener("click", () => {
-      panel.hidden = !panel.hidden;
-    });
+
+    // No handler at all when there is nothing to show. Deliberately not the
+    // `disabled` attribute: a disabled control swallows mouse events in some
+    // browsers, and the title tooltip is the only thing explaining why.
+    if (!disabled) {
+      button.addEventListener("click", () => {
+        panel.hidden = !panel.hidden;
+      });
+    }
 
     // Added to the *map's* UI, not viewer.addControl. The viewer's control
     // strip lives inside .geocam-viewer, which the page sets to display:none
@@ -395,13 +421,15 @@ export const detectionTags = function (config = {}) {
     // layer, so it belongs with the map's own controls.
     container = node("DIV", { class: "gdt-container" });
     container.appendChild(button);
-    container.appendChild(buildPanel());
+    if (!disabled) {
+      container.appendChild(buildPanel());
+      render();
+    }
     mapView.ui.add(container, "top-right");
-    render();
     console.info(
       `detection-tags: ${categories.length} categories, shot total ${
         shotCount === null ? "unknown" : shotCount
-      } — button added to right-top`
+      } — button added to the map UI${disabled ? " (disabled)" : ""}`
     );
   };
 

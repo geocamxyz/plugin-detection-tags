@@ -59,9 +59,15 @@ map layer, so it belongs with the map's controls.
 - **Counts may be unknown.** A cell tagged before Manager recorded counts shows
   `–` instead of `n / N`, and nothing is treated as full coverage. Unknown is
   not zero. Re-running the segmentation summary ingest fills them in.
-- **No categories, no widget.** A cell that was never segmented, a Manager too
-  old to advertise its v2 service, and an embedded viewer with no credential for
-  it all render nothing rather than erroring.
+- **No detections — disabled button.** When the service answers and declares no
+  categories, the button still appears, greyed and inert, titled *"Segmentations
+  or summary not completed"*. Someone looking for it learns why it is empty
+  instead of wondering where it went.
+- **Service unreachable — no widget.** A Manager too old to advertise its v2
+  path, an embedded viewer with no credential, a failed request: these render
+  nothing and log why. Deliberately *not* the disabled state — we have learned
+  nothing about whether segmentation ran, so claiming it did not would be a
+  guess.
 
 ## How the recolouring works
 
