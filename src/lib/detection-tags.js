@@ -16,11 +16,11 @@ const injectStyle = (id, rules) => {
 };
 
 const STYLES = `
-  .gdt-container { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+  /* The Expand positions and frames the panel, but esri-expand__content is
+     transparent — without an explicit background the map shows through. Border
+     and shadow are left to Esri; only the fill is ours. */
   .gdt-panel { width: 240px; max-height: 60vh; overflow-y: auto; font: 13px/1.4 system-ui, sans-serif;
-    color: #1f2328; background: #fff; border: 1px solid rgba(15,16,6,.1); border-radius: 14px;
-    box-shadow: 0 1px 2px rgba(0,0,0,.06); padding: 10px; }
-  .gdt-panel[hidden] { display: none; }
+    color: #1f2328; background: #fff; padding: 10px; box-sizing: border-box; }
   .gdt-h { font-size: 12px; font-weight: 600; color: rgba(31,35,40,.6); display: flex;
     align-items: center; justify-content: space-between; margin-bottom: 6px; }
   .gdt-clear { border: none; background: none; font: inherit; font-size: 11px; color: #0d9488;
@@ -38,13 +38,15 @@ const STYLES = `
   .gdt-foot { margin-top: 8px; padding-top: 7px; border-top: 1px solid rgba(15,16,6,.08);
     display: flex; align-items: center; gap: 6px; font-size: 12px; }
   .gdt-note { margin-top: 6px; font-size: 11px; color: rgba(31,35,40,.5); }
-  /* esri-widget--button supplies the white background, size and hover; this
-     only adds the glyph. background-size/position are set because the class
-     expects an icon font child rather than a background image. */
-  .geocam-detection-tags-button { background-repeat: no-repeat; background-position: center;
-    background-size: 18px 18px; cursor: pointer; }
-  .geocam-detection-tags-button.gdt-off { opacity: .4; cursor: default; }
-  .geocam-detection-tags-button { background-image: url('data:image/svg+xml;utf8,\
+  /* Esri applies expandIconClass to a span where it would otherwise put an
+     icon-font glyph, so this has to give itself a box to paint into. The same
+     class is reused on the disabled plain button, which mimics the markup of a
+     collapsed Expand. */
+  .geocam-detection-tags-icon { display: inline-block; width: 16px; height: 16px;
+    vertical-align: middle; background-repeat: no-repeat; background-position: center;
+    background-size: 16px 16px; }
+  .gdt-off { opacity: .4; cursor: default; }
+  .geocam-detection-tags-icon { background-image: url('data:image/svg+xml;utf8,\
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2"\
  stroke-linecap="round" stroke-linejoin="round"><path d="M3 8V5a2 2 0 0 1 2-2h3"/>\
 <path d="M16 3h3a2 2 0 0 1 2 2v3"/><path d="M21 16v3a2 2 0 0 1-2 2h-3"/>\
@@ -59,8 +61,8 @@ const SHOT_LAYER_SUFFIX = `/${SHOT_LAYER_ID}`;
 
 export const detectionTags = function (config = {}) {
   let viewer;
-  let container;
-  let button;
+  let expandWidget; // the Esri Expand, when there are categories
+  let button; // a plain disabled button, when there are none
   let panel;
   let listEl;
   let clearBtn;
@@ -327,7 +329,8 @@ export const detectionTags = function (config = {}) {
   };
 
   const buildPanel = () => {
-    panel = node("DIV", { class: "gdt-panel", hidden: "hidden" });
+    // No `hidden` attribute: the Expand owns showing and hiding this.
+    panel = node("DIV", { class: "gdt-panel" });
 
     const header = node("DIV", { class: "gdt-h" });
     header.appendChild(node("SPAN", {}, "Detections"));
@@ -397,53 +400,64 @@ export const detectionTags = function (config = {}) {
       console.info(`detection-tags: no tag_* fields on ${v2Base}${SHOT_LAYER_SUFFIX} — showing disabled`);
     }
 
-    // esri-widget--button, not the viewer's control-button class. The latter is
-    // styled for the viewer's chrome over imagery — rgba(255,255,255,.5), which
-    // among Esri's solid-white widget buttons reads as a disabled control.
-    // Taking Esri's own class matches the stack it now sits in, and keeps
-    // matching if their theme changes.
-    button = node("DIV", {
-      class: `geocam-detection-tags-button esri-widget--button${disabled ? " gdt-off" : ""}`,
-      role: "button",
-      title: disabled
-        ? "Segmentations or summary not completed"
-        : "Detections found in this cell",
-    });
-
-    // No handler at all when there is nothing to show. Deliberately not the
-    // `disabled` attribute: a disabled control swallows mouse events in some
-    // browsers, and the title tooltip is the only thing explaining why.
-    if (!disabled) {
-      button.addEventListener("click", () => {
-        panel.hidden = !panel.hidden;
+    // Everything goes in the *map's* UI, not viewer.addControl: the viewer's
+    // control strip lives inside .geocam-viewer, which the page hides whenever
+    // the panorama is collapsed — i.e. in map mode, exactly when you want to
+    // recolour shots. What this widget drives is a map layer.
+    if (disabled) {
+      // A plain button, since there is no panel to expand. Collapsed Expands
+      // render as an esri-widget--button with an icon span, so matching that
+      // markup keeps it indistinguishable from its neighbours.
+      //
+      // Deliberately not the `disabled` attribute: disabled controls swallow
+      // mouse events in some browsers, and the tooltip is the only thing
+      // explaining the state.
+      button = node("DIV", {
+        class: "esri-widget--button gdt-off",
+        role: "button",
+        title: "Segmentations or summary not completed",
       });
-    }
-
-    // Added to the *map's* UI, not viewer.addControl. The viewer's control
-    // strip lives inside .geocam-viewer, which the page sets to display:none
-    // whenever the panorama is collapsed — which is map mode, exactly when you
-    // want to recolour shots on the map. What this widget drives is a map
-    // layer, so it belongs with the map's own controls.
-    container = node("DIV", { class: "gdt-container" });
-    container.appendChild(button);
-    if (!disabled) {
-      container.appendChild(buildPanel());
+      button.appendChild(node("SPAN", { class: "geocam-detection-tags-icon", "aria-hidden": "true" }));
+      mapView.ui.add(button, "top-right");
+    } else {
+      // A real Esri Expand rather than a hand-rolled button and panel. Hand
+      // rolling stacked the panel *under* the button, which pushed the widgets
+      // below it down the UI column; Expand positions its panel beside the
+      // stack and gives the collapse affordance the other widgets have.
+      //
+      // Same group as the map's own widgets so only one panel is open at a
+      // time, and autoCollapse off for the reason map.js sets it off: this map
+      // moves itself to follow the current shot.
+      const [Expand] = await loadEsri(["esri/widgets/Expand"]);
+      expandWidget = new Expand({
+        view: mapView,
+        content: buildPanel(),
+        expandIconClass: "geocam-detection-tags-icon",
+        expandTooltip: "Detections found in this cell",
+        group: "expands",
+        autoCollapse: false,
+      });
+      mapView.ui.add(expandWidget, "top-right");
       render();
     }
-    mapView.ui.add(container, "top-right");
+
     console.info(
       `detection-tags: ${categories.length} categories, shot total ${
         shotCount === null ? "unknown" : shotCount
-      } — button added to the map UI${disabled ? " (disabled)" : ""}`
+      } — added to the map UI${disabled ? " (disabled)" : ""}`
     );
   };
 
   this.destroy = function () {
     applyEffect(null);
-    if (container) {
-      if (mapView && mapView.ui) mapView.ui.remove(container);
-      if (container.parentNode) container.parentNode.removeChild(container);
+    if (expandWidget) {
+      if (mapView && mapView.ui) mapView.ui.remove(expandWidget);
+      expandWidget.destroy();
     }
-    container = button = panel = listEl = clearBtn = fadeInput = null;
+    if (button) {
+      if (mapView && mapView.ui) mapView.ui.remove(button);
+      if (button.parentNode) button.parentNode.removeChild(button);
+    }
+    expandWidget = button = panel = listEl = clearBtn = fadeInput = null;
   };
 };
