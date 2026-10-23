@@ -77,6 +77,7 @@ export const detectionTags = function (config = {}) {
   let shotsLayer = null; // the base layer the connector draws
   let hitLayer = null; // our own layer, only the selected category
   let tokenRegistered = false;
+  const unsubscribe = []; // viewer store subscriptions, dropped on destroy
 
   injectStyle("geocam-detection-tags", STYLES);
 
@@ -139,6 +140,11 @@ export const detectionTags = function (config = {}) {
         // Absent rather than 0 when the cell was tagged before counts were
         // recorded. Keep the distinction: unknown is not "no shots".
         count: typeof f.count === "number" ? f.count : null,
+        // Which segmentation runs found this category, and where each keeps
+        // its masks: [{ id, count, masks: { capture => base path } }]. A cell
+        // can hold several unrelated summaries, so this is the only thing
+        // tying a tag back to the annotations that produced it.
+        summaries: Array.isArray(f.summaries) ? f.summaries : [],
       }));
   };
 
@@ -243,12 +249,206 @@ export const detectionTags = function (config = {}) {
     mapView.map.add(hitLayer);
   };
 
+  // --- masks over the imagery ----------------------------------------------
+  //
+  // The annotations are stored per image, in the source image's own pixel
+  // coordinates — the worker runs undo_preprocess before writing them, so
+  // whatever resizing or rotation the model needed has already been taken
+  // back out. That is what makes this tractable: the fisheye-to-sphere
+  // mapping is baked into the viewer's OBJ UVs, so painting a mask onto the
+  // source image in the right pixels is the whole job. No camera model, no
+  // projection maths.
+
+  const MASK_COLOUR = "rgb(255, 0, 255)"; // the hit markers' magenta
+  const MASK_ALPHA = 0.45;
+
+  // Masks are blobs, not line art, and the viewer scales whatever we hand it
+  // onto the texture. Capping the overlay keeps three 4096x3000 canvases from
+  // being held for the sake of detail nothing can see.
+  const MAX_OVERLAY_WIDTH = 2048;
+
+  let maskStamp = 0; // generation counter; a stale fetch must not paint
+  const painted = new Set(); // camera indices we own, so we clear only ours
+
+  // Does this viewer build have the overlay registry? Older ones do not, and
+  // the category list is still perfectly useful without masks.
+  const overlaysSupported = () =>
+    viewer && typeof viewer.imageOverlay === "function";
+
+  // COCO RLE. `counts` is either a plain list of run lengths or pycocotools'
+  // LEB128-ish string, which is the same encoding report_annotations.py reads
+  // server-side. Runs alternate background-first and are column-major.
+  const decodeCounts = (counts) => {
+    if (Array.isArray(counts)) return counts;
+    if (typeof counts !== "string") return [];
+
+    const runs = [];
+    let p = 0;
+    while (p < counts.length) {
+      let x = 0;
+      let k = 0;
+      let more = 1;
+      while (more) {
+        const c = counts.charCodeAt(p) - 48;
+        x |= (c & 0x1f) << (5 * k);
+        more = c & 0x20;
+        p += 1;
+        k += 1;
+        if (!more && c & 0x10) x |= -1 << (5 * k);
+      }
+      // Deltas against the run two back, from the third run on.
+      if (runs.length > 2) x += runs[runs.length - 2];
+      runs.push(x);
+    }
+    return runs;
+  };
+
+  // One run is a contiguous range of column-major pixel indices, which on the
+  // image is a vertical segment — or, when it spans columns, a partial column,
+  // some whole ones, and a partial column. Filling it as two or three rects
+  // beats touching every pixel: a typical mask is a few thousand runs against
+  // twelve million pixels.
+  const fillRun = (ctx, from, to, height) => {
+    const firstColumn = Math.floor(from / height);
+    const lastColumn = Math.floor(to / height);
+    const firstRow = from % height;
+    const lastRow = to % height;
+
+    if (firstColumn === lastColumn) {
+      ctx.fillRect(firstColumn, firstRow, 1, lastRow - firstRow + 1);
+      return;
+    }
+    ctx.fillRect(firstColumn, firstRow, 1, height - firstRow);
+    if (lastColumn - firstColumn > 1) {
+      ctx.fillRect(firstColumn + 1, 0, lastColumn - firstColumn - 1, height);
+    }
+    ctx.fillRect(lastColumn, 0, 1, lastRow + 1);
+  };
+
+  const fillMask = (ctx, segmentation, height) => {
+    const runs = decodeCounts(segmentation.counts);
+    let at = 0;
+    for (let i = 0; i < runs.length; i += 1) {
+      // Odd runs are foreground, the background-first alternation.
+      if (i % 2 === 1 && runs[i] > 0) fillRun(ctx, at, at + runs[i] - 1, height);
+      at += runs[i];
+    }
+  };
+
+  // Painted opaque first and made translucent on the way out, so two
+  // instances of the same category overlapping read as one region rather
+  // than a darker patch where they meet.
+  const paint = (annotations) => {
+    const size = annotations[0].segmentation.size || [];
+    const height = size[0];
+    const width = size[1];
+    if (!height || !width) return null;
+
+    const solid = document.createElement("canvas");
+    solid.width = width;
+    solid.height = height;
+    const ctx = solid.getContext("2d");
+    ctx.fillStyle = MASK_COLOUR;
+    annotations.forEach((a) => {
+      const s = a.segmentation || {};
+      // Mixed frame sizes in one file would land in the wrong place; skip
+      // rather than misplace. Has not been seen, but it is one comparison.
+      if ((s.size || [])[0] === height && (s.size || [])[1] === width) {
+        fillMask(ctx, s, height);
+      }
+    });
+
+    const scale = Math.min(1, MAX_OVERLAY_WIDTH / width);
+    const out = document.createElement("canvas");
+    out.width = Math.round(width * scale);
+    out.height = Math.round(height * scale);
+    const outCtx = out.getContext("2d");
+    outCtx.globalAlpha = MASK_ALPHA;
+    outCtx.drawImage(solid, 0, 0, out.width, out.height);
+    return out;
+  };
+
+  // The annotation path mirrors the image path — same camera, folder and
+  // number, .json instead of .jpg — under a different source. Taking the last
+  // three segments of whatever the viewer is actually displaying means we do
+  // not have to reconstruct the folder-bucketing rule, and we cannot address a
+  // frame other than the one on screen.
+  const maskUrl = (base, imageUrl) => {
+    const tail = new URL(imageUrl, window.location.href).pathname
+      .split("/")
+      .filter(Boolean)
+      .slice(-3)
+      .join("/")
+      .replace(/\.[^.]+$/, "");
+    return new URL(`${base.replace(/\/+$/, "")}/${tail}.json`, v2Base).href;
+  };
+
+  // A 404 is ordinary: the summary covers the capture, but this particular
+  // frame had nothing worth writing, or segmentation skipped it.
+  const fetchMask = async (base, imageUrl) => {
+    try {
+      const response = await fetch(maskUrl(base, imageUrl), {
+        credentials: "same-origin",
+      });
+      if (!response.ok) return null;
+      return await response.json();
+    } catch (e) {
+      console.warn("detection-tags: could not read masks", base, e);
+      return null;
+    }
+  };
+
+  const clearMasks = () => {
+    maskStamp += 1;
+    if (!overlaysSupported()) return;
+    painted.forEach((camera) => viewer.imageOverlay(camera, null));
+    painted.clear();
+  };
+
+  const drawMasks = async () => {
+    clearMasks();
+    if (!overlaysSupported() || !viewer.visible()) return;
+
+    const category = categories.find((c) => c.field === selected);
+    if (!category) return;
+
+    const capture = (viewer.shotInfo() || {}).capture;
+    const urls = viewer.urls() || [];
+    // One base per summary that found this category in this capture. Usually
+    // one; two means two runs both found it and both get drawn.
+    const bases = category.summaries
+      .map((s) => s.masks && s.masks[capture])
+      .filter(Boolean);
+    if (!bases.length || !urls.length) return;
+
+    const stamp = maskStamp;
+    await Promise.all(
+      urls.map(async (url, camera) => {
+        const docs = await Promise.all(bases.map((b) => fetchMask(b, url)));
+        // A later selection or shot change owns the overlays now.
+        if (stamp !== maskStamp) return;
+
+        const found = docs
+          .filter(Boolean)
+          .flatMap((d) => d.annotations || [])
+          .filter((a) => a && a.category_name === category.label);
+        if (!found.length) return;
+
+        const canvas = paint(found);
+        if (!canvas || stamp !== maskStamp) return;
+        viewer.imageOverlay(camera, canvas);
+        painted.add(camera);
+      })
+    );
+  };
+
   // --- UI ------------------------------------------------------------------
 
   const select = async (category) => {
     if (!category || selected === category.field) {
       selected = null;
       applyEffect(null);
+      drawMasks();
       render();
       return;
     }
@@ -258,10 +458,14 @@ export const detectionTags = function (config = {}) {
 
     try {
       await applyEffect(category.field);
+      // Deliberately after applyEffect and not awaited together: the map
+      // recolour is the cheap half and should not wait on three image fetches.
+      drawMasks();
     } catch (e) {
       console.warn("detection-tags: could not select", category.field, e);
       selected = null;
       applyEffect(null);
+      drawMasks();
       render();
     }
   };
@@ -439,6 +643,19 @@ export const detectionTags = function (config = {}) {
       });
       mapView.ui.add(expandWidget, "top-right");
       render();
+
+      // Masks belong to the frame on screen, so follow it. `urls` changes once
+      // per shot and carries exactly the three images the overlays sit on;
+      // `visible` covers opening and closing the panorama. Both fire on
+      // registration, which is what draws the masks if a shot is already open.
+      if (overlaysSupported()) {
+        unsubscribe.push(viewer.urls(() => drawMasks()));
+        unsubscribe.push(viewer.visible(() => drawMasks()));
+      } else {
+        console.info(
+          "detection-tags: viewer has no imageOverlay — categories only, no masks"
+        );
+      }
     }
 
     console.info(
@@ -450,6 +667,8 @@ export const detectionTags = function (config = {}) {
 
   this.destroy = function () {
     applyEffect(null);
+    unsubscribe.splice(0).forEach((off) => off());
+    clearMasks();
     if (expandWidget) {
       if (mapView && mapView.ui) mapView.ui.remove(expandWidget);
       expandWidget.destroy();

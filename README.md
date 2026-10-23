@@ -101,6 +101,42 @@ Three earlier approaches, and why each was dropped:
 The current approach has none of those: the filtering is server-side so there
 is no id list and no size ceiling, and nothing global is mutated.
 
+## Masks over the imagery
+
+With a category selected and the panorama open, the plugin also paints that
+category's **actual detection masks** onto the three images, following the shot.
+It needs a viewer with `imageOverlay()` (2.4.13+); on an older one the category
+list works exactly as before and a line is logged saying masks are off.
+
+Why this is simpler than it sounds: the annotations are written **in the source
+image's own pixel coordinates** — the worker calls `undo_preprocess` before
+saving, so whatever resizing the model needed is already taken back out — and
+the fisheye-to-sphere mapping is baked into the viewer's OBJ UVs. So painting a
+mask in the right pixels of the source image is the entire job. There is no
+camera model here and no projection maths.
+
+Finding the files is two lookups:
+
+| From | Gives |
+|---|---|
+| `tag_*` field's `summaries[].masks[capture]` | the mask service base for the segmentation run that found this category |
+| last three segments of `viewer.urls()[camera]` | `camera/folder/number`, the same path under that base with `.json` |
+
+Deriving the path from the URL the viewer is *actually displaying*, rather than
+reconstructing the folder-bucketing rule, means we cannot address a frame other
+than the one on screen.
+
+Masks are COCO RLE: column-major runs, background first, `counts` either a list
+or pycocotools' LEB128 string. Each run is a contiguous range of column-major
+indices, so it draws as two or three `fillRect`s rather than a pass over twelve
+million pixels — a typical mask is a few thousand runs. Instances are painted
+opaque and the whole layer is made translucent on the way out, so two
+overlapping instances of one category read as one region rather than a darker
+patch where they meet.
+
+A 404 on a mask file is ordinary and silent: the run covered the capture, but
+this frame had nothing worth writing.
+
 ### Authentication of the hit layer
 
 The PAT is registered with Esri's `IdentityManager`, not passed in
@@ -119,6 +155,12 @@ Requires ArcGIS JS **4.22+**; the connector loads 4.26.
   large capture draws every one of its shots. That is the right default for
   sparse categories, which are the ones worth looking at, and the dense ones are
   disabled at full coverage — but it has not been measured on a 50k capture.
+- Masks are drawn for the **selected** category only, in one colour. Showing
+  every category at once, in each one's own `category_color`, is the obvious
+  next step and the annotations already carry the colour.
+- A summary ingested before Manager recorded `masks` has nothing to point at,
+  so the category still selects on the map but draws no masks. Re-running the
+  summary ingest fills it in.
 
 ## Build
 
