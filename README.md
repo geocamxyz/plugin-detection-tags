@@ -105,8 +105,8 @@ is no id list and no size ceiling, and nothing global is mutated.
 
 With a category selected and the panorama open, the plugin also paints that
 category's **actual detection masks** onto the three images, following the shot.
-It needs a viewer with `imageOverlay()` (2.4.13+); on an older one the category
-list works exactly as before and a line is logged saying masks are off.
+It needs a viewer build with `imageOverlay()`; on an older one the category list
+works exactly as before and a line is logged saying masks are off.
 
 Why this is simpler than it sounds: the annotations are written **in the source
 image's own pixel coordinates** — the worker calls `undo_preprocess` before
