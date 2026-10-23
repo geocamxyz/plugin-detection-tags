@@ -405,7 +405,15 @@ export const detectionTags = function (config = {}) {
     painted.clear();
   };
 
-  const drawMasks = async () => {
+  // Every caller fires this and walks away — a selection, a shot change, the
+  // panorama opening. Without this the whole thing is an unhandled rejection
+  // that Chrome reports under no stack anyone will connect to this plugin.
+  const drawMasks = () =>
+    paintMasks().catch((e) =>
+      console.warn("detection-tags: could not draw masks", e)
+    );
+
+  const paintMasks = async () => {
     clearMasks();
     if (!overlaysSupported() || !viewer.visible()) return;
 
@@ -419,7 +427,19 @@ export const detectionTags = function (config = {}) {
     const bases = category.summaries
       .map((s) => s.masks && s.masks[capture])
       .filter(Boolean);
-    if (!bases.length || !urls.length) return;
+    // The map selection still works here, so this is easy to miss. Say which
+    // half is missing: a Manager too old to publish `summaries`, a summary
+    // ingested before masks were recorded, and a shot whose capture no
+    // summary covers all look identical from the outside.
+    if (!bases.length || !urls.length) {
+      console.info(
+        `detection-tags: no masks drawn for ${category.label} — ` +
+          (urls.length
+            ? `${category.summaries.length} summary/ies, none recording masks for capture ${capture}`
+            : "no images on screen")
+      );
+      return;
+    }
 
     const stamp = maskStamp;
     await Promise.all(
