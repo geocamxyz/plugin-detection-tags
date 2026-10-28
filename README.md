@@ -122,12 +122,35 @@ that hiding was an obstacle; here it is the correct behaviour.
 
 ### What it does
 
-- Lists every category found in the current shot, with an instance count.
+- Lists every category found in the current shot, with an instance count and a **colour
+  swatch** matching how it is drawn.
+- **Draws every category at once**, each in its own colour. Clicking a category isolates it;
+  clicking it again brings the rest back. No selection means *everything*, not nothing — the
+  panel is a legend for the image, so the whole picture is the useful resting state.
 - **Numbered chips** per instance — click to centre the view on it. Capped at 9: past that,
   panning finds them faster than a list does. The question this answers is *"where is the one
   traffic light"*, not "enumerate forty pedestrians".
-- **show masks** toggles the overlay without refetching or re-decoding, so it is a real A/B
-  against the image.
+- **show masks** and **opacity** both only change how the already-decoded masks are composited,
+  so they are instant. That is the point of having them: comparing mask against image has to be
+  a flick, not a refetch.
+
+### The palette is the model's, and it collides
+
+Colours come from each annotation's `category_color`. That is the only palette guaranteed to
+agree with itself across every shot and camera — assigning our own would mean `person` changing
+colour between frames as the category list changed.
+
+It is not a well-separated palette. On the first test shot the closest pairs are `building`
+against `road` at a distance of 49 in RGB, and `car` against `streetlight` at 63 — close enough
+to be hard to tell apart over photographic detail. The swatch sits next to the label so the
+mapping is at least discoverable, and **clicking a category to isolate it is the way to be
+sure**.
+
+Drawing order is largest mask first. `sky`, `building` and `road` cover most of a frame between
+them, so in file order they bury every small detection — which are exactly the ones worth
+finding. Masks are painted opaque and made translucent once, at the end, so a car on a road is
+the car's colour rather than a blend of the two, and two instances of one category overlapping
+do not show a darker seam.
 
 Chips are ordered by camera, then by descending mask area, so the number beside a detection
 means the same thing after a redraw.
@@ -210,9 +233,10 @@ Requires ArcGIS JS **4.22+**; the connector loads 4.26.
   large capture draws every one of its shots. That is the right default for
   sparse categories, which are the ones worth looking at, and the dense ones are
   disabled at full coverage — but it has not been measured on a 50k capture.
-- Masks are drawn for the **selected** category only, in one colour. Showing
-  every category at once, in each one's own `category_color`, is the obvious
-  next step and the annotations already carry the colour.
+- The model's palette has near-collisions, so two categories can be hard to tell apart on the
+  image. Isolating one is the workaround; see above.
+- An object straddling two of the rig's overlapping cameras is detected twice and counted
+  twice. Deduplicating needs a rule for "the same object", which is guesswork.
 - A summary ingested before Manager recorded `masks` has nothing to point at,
   so the category still selects on the map but draws no masks. Re-running the
   summary ingest fills it in.

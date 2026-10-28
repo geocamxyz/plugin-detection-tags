@@ -70,6 +70,10 @@ const STYLES = `
     color: inherit; font: inherit; text-align: left; cursor: pointer; }
   .gdt-v-name:hover { border-color: rgba(255,255,255,.35); }
   .gdt-v-name.active { border-color: #2dd4bf; background: rgba(45,212,191,.15); font-weight: 600; }
+  /* The legend. A ring rather than a bare square, so a swatch that happens
+     to be near-black still has an edge against this panel. */
+  .gdt-v-swatch { flex: 0 0 auto; width: 11px; height: 11px; border-radius: 3px;
+    box-shadow: 0 0 0 1px rgba(255,255,255,.45); }
   .gdt-v-label { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .gdt-v-count { opacity: .6; font-variant-numeric: tabular-nums; }
   .gdt-v-chips { display: flex; flex-wrap: wrap; gap: 3px; justify-self: start; }
@@ -83,7 +87,10 @@ const STYLES = `
   .gdt-v-more { opacity: .55; font-size: 11px; align-self: center; }
   .gdt-v-note { opacity: .7; grid-column: 1 / -1; }
   .gdt-v-foot { margin-top: 10px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,.15);
-    display: flex; align-items: center; gap: 6px; cursor: pointer; }
+    display: flex; flex-direction: column; gap: 6px; }
+  .gdt-v-footrow { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+  .gdt-v-footrow input[type="range"] { flex: 1 1 auto; min-width: 0; height: 3px; }
+  .gdt-v-opacity-label { opacity: .7; }
   /* The viewer puts a control's icon on the button as a centred background
      image — no child element. A 16px span inside a 32px button is what left
      this one sitting up in the corner. White, because this strip is dark;
@@ -140,8 +147,10 @@ export const detectionTags = function (config = {}) {
   // `selected`. The two answer different questions — "which shots contain a
   // person" versus "what is in this image" — and the first is asked with the
   // panorama closed, which is exactly when this panel does not exist.
-  let imageSelected = null; // category drawn on the imagery, or null
+  // null means every category, each in its own colour — not "nothing".
+  let imageSelected = null;
   let showMasks = true;
+  let maskOpacity = 0.45;
   let panelOpen = false;
   let viewerButton, viewerPanelEl, viewerListEl, maskToggle;
 
@@ -325,8 +334,10 @@ export const detectionTags = function (config = {}) {
   // source image in the right pixels is the whole job. No camera model, no
   // projection maths.
 
-  const MASK_COLOUR = "rgb(255, 0, 255)"; // the hit markers' magenta
-  const MASK_ALPHA = 0.45;
+  // Only reached by an annotation carrying no category_color of its own.
+  // Everything else is drawn in the model's own palette, which is the one
+  // colouring guaranteed to stay consistent across shots and cameras.
+  const MASK_COLOUR = "rgb(255, 0, 255)";
 
   // Masks are blobs, not line art, and the viewer scales whatever we hand it
   // onto the texture. Capping the overlay keeps three 4096x3000 canvases from
@@ -401,35 +412,51 @@ export const detectionTags = function (config = {}) {
     }
   };
 
-  // Painted opaque first and made translucent on the way out, so two
-  // instances of the same category overlapping read as one region rather
-  // than a darker patch where they meet.
-  const paint = (annotations) => {
-    const size = annotations[0].segmentation.size || [];
-    const height = size[0];
-    const width = size[1];
+  // The model ships a colour per category, which is the one palette
+  // guaranteed to agree with itself across every shot and every camera.
+  const rgb = (colour) =>
+    Array.isArray(colour) && colour.length >= 3
+      ? `rgb(${colour[0]}, ${colour[1]}, ${colour[2]})`
+      : MASK_COLOUR;
+
+  // Everything for one camera, in one pass.
+  //
+  // Painted opaque and made translucent only on the way out, which does two
+  // jobs: two instances of a category overlapping read as one region instead
+  // of a darker patch, and — once every category is drawn at once — a car on
+  // a road is the car's colour rather than a muddy blend of the two.
+  //
+  // Drawn largest first. `sky`, `building` and `road` cover most of a frame
+  // between them, so in file order they would bury every small detection,
+  // which are the ones anybody is looking for.
+  const paint = (items) => {
+    const sized = items.filter((i) => i.segmentation && i.segmentation.size);
+    if (!sized.length) return null;
+    const [height, width] = sized[0].segmentation.size;
     if (!height || !width) return null;
 
     const solid = document.createElement("canvas");
     solid.width = width;
     solid.height = height;
     const ctx = solid.getContext("2d");
-    ctx.fillStyle = MASK_COLOUR;
-    annotations.forEach((a) => {
-      const s = a.segmentation || {};
-      // Mixed frame sizes in one file would land in the wrong place; skip
-      // rather than misplace. Has not been seen, but it is one comparison.
-      if ((s.size || [])[0] === height && (s.size || [])[1] === width) {
+
+    [...sized]
+      .sort((a, b) => (b.pixels || 0) - (a.pixels || 0))
+      .forEach((item) => {
+        const s = item.segmentation;
+        // Mixed frame sizes in one file would land in the wrong place; skip
+        // rather than misplace. Has not been seen, but it is one comparison.
+        if (s.size[0] !== height || s.size[1] !== width) return;
+        ctx.fillStyle = rgb(item.colour);
         fillMask(ctx, s, height);
-      }
-    });
+      });
 
     const scale = Math.min(1, MAX_OVERLAY_WIDTH / width);
     const out = document.createElement("canvas");
     out.width = Math.round(width * scale);
     out.height = Math.round(height * scale);
     const outCtx = out.getContext("2d");
-    outCtx.globalAlpha = MASK_ALPHA;
+    outCtx.globalAlpha = maskOpacity;
     outCtx.drawImage(solid, 0, 0, out.width, out.height);
     return out;
   };
@@ -679,23 +706,35 @@ export const detectionTags = function (config = {}) {
   // Synchronous: everything it needs was fetched and decoded by
   // loadDetections. That is what lets the show-masks toggle be a real A/B
   // against the image rather than a refetch with a pause in the middle.
+  //
+  // No selection means *everything*, each category in its own colour — the
+  // panel is a legend for the image, so the useful resting state is the whole
+  // picture. Selecting one isolates it; selecting it again comes back here.
   const paintMasks = () => {
     clearMasks();
     if (!overlaysSupported() || !viewer.visible()) return;
-    if (!showMasks || !imageSelected) return;
+    if (!showMasks) return;
 
-    const entry = detections.find((d) => d.category === imageSelected);
-    if (!entry) return;
+    const shown = imageSelected
+      ? detections.filter((d) => d.category === imageSelected)
+      : detections;
+    if (!shown.length) return;
 
     const byCamera = new Map();
-    entry.instances.forEach((i) => {
-      const list = byCamera.get(i.camera) || [];
-      list.push({ segmentation: i.segmentation });
-      byCamera.set(i.camera, list);
-    });
+    shown.forEach((entry) =>
+      entry.instances.forEach((i) => {
+        const list = byCamera.get(i.camera) || [];
+        list.push({
+          segmentation: i.segmentation,
+          colour: entry.colour,
+          pixels: i.measured.pixels,
+        });
+        byCamera.set(i.camera, list);
+      })
+    );
 
-    byCamera.forEach((instances, camera) => {
-      const canvas = paint(instances);
+    byCamera.forEach((items, camera) => {
+      const canvas = paint(items);
       if (!canvas) return;
       viewer.imageOverlay(camera, canvas);
       painted.add(camera);
@@ -764,11 +803,21 @@ export const detectionTags = function (config = {}) {
     }
 
     detections.forEach((entry) => {
+      const isolated = imageSelected === entry.category;
       const name = node("BUTTON", {
-        class: `gdt-v-name${imageSelected === entry.category ? " active" : ""}`,
+        class: `gdt-v-name${isolated ? " active" : ""}`,
         type: "button",
-        title: `Draw every ${entry.category} in this shot`,
+        title: isolated
+          ? "Show every category again"
+          : `Show only ${entry.category}`,
       });
+      // A swatch rather than coloured label text. The palette is the model's,
+      // not ours, and it contains plenty of dark browns and greys that are
+      // unreadable as text on this panel — a filled square carries the same
+      // information and stays legible whatever colour lands in it.
+      const swatch = node("SPAN", { class: "gdt-v-swatch", "aria-hidden": "true" });
+      swatch.style.background = rgb(entry.colour);
+      name.appendChild(swatch);
       name.appendChild(node("SPAN", { class: "gdt-v-label" }, entry.category));
       name.appendChild(node("SPAN", { class: "gdt-v-count" }, String(entry.instances.length)));
       name.addEventListener("click", () => selectForImage(entry.category));
@@ -826,7 +875,9 @@ export const detectionTags = function (config = {}) {
     viewerListEl = node("DIV", { class: "gdt-v-list" });
     viewerPanelEl.appendChild(viewerListEl);
 
-    const foot = node("LABEL", { class: "gdt-v-foot" });
+    const foot = node("DIV", { class: "gdt-v-foot" });
+
+    const toggleRow = node("LABEL", { class: "gdt-v-footrow" });
     maskToggle = node("INPUT", { type: "checkbox" });
     maskToggle.checked = showMasks;
     maskToggle.addEventListener("change", () => {
@@ -835,8 +886,24 @@ export const detectionTags = function (config = {}) {
       // flicking this is an A/B against the image rather than a refetch.
       drawMasks();
     });
-    foot.appendChild(maskToggle);
-    foot.appendChild(node("SPAN", {}, "show masks"));
+    toggleRow.appendChild(maskToggle);
+    toggleRow.appendChild(node("SPAN", {}, "show masks"));
+    foot.appendChild(toggleRow);
+
+    // Same reason the toggle is instant: opacity only changes the single
+    // alpha applied when the composite is drawn out, so dragging this is a
+    // redraw of already-decoded masks.
+    const opacityRow = node("LABEL", { class: "gdt-v-footrow" });
+    opacityRow.appendChild(node("SPAN", { class: "gdt-v-opacity-label" }, "opacity"));
+    const slider = node("INPUT", { type: "range", min: "10", max: "100", step: "5" });
+    slider.value = String(Math.round(maskOpacity * 100));
+    slider.addEventListener("input", () => {
+      maskOpacity = Number(slider.value) / 100;
+      drawMasks();
+    });
+    opacityRow.appendChild(slider);
+    foot.appendChild(opacityRow);
+
     viewerPanelEl.appendChild(foot);
 
     return viewerButton;
