@@ -175,6 +175,10 @@ Two things make the obvious implementation wrong, both confirmed on real data:
   happily — 3 of those same 12 chose a point there. So the target is the nearest on-mask point
   **that resolves to a direction**, and a detection where none does gets a struck-through chip
   that says why. A click that silently does nothing reads as a bug.
+- **Every candidate is tried, not the nearest few.** A large mask can straddle the circle's edge
+  with its *centroid outside it* — a shopfront sign running off the top of the frame does this —
+  and then every point near the centroid fails while plenty further out would work. An earlier
+  cap at the nearest 64 made two of five struck-through chips on one shot false negatives.
 
 A viewer too old to centre is a different failure and says so separately, rather than blaming
 the lens circle for a missing API.

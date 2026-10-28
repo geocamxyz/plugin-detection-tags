@@ -590,7 +590,15 @@ export const detectionTags = function (config = {}) {
   // frame is outside the circle, and 3 detections in 12 chose a point there.
   // Returns null when nothing on the mask is reachable, so the caller can say
   // so rather than appear to ignore a click.
-  const ATTEMPTS = 64;
+  //
+  // Every candidate is tried, not just the closest handful. A big mask can
+  // straddle the edge of the circle with its *centroid* on the outside — a
+  // shopfront sign running off the top of the frame does exactly this — and
+  // then every candidate near the centroid fails while plenty further out
+  // would have worked. Capping the search at the nearest 64 made two of five
+  // dead chips on one shot false negatives. Candidates are bounded at 512 and
+  // the scan stops at the first hit, so the full sweep only happens for a
+  // detection that really is unreachable.
 
   // Separate from aimFor returning null, which means "nothing on this mask is
   // reachable". A viewer without the call cannot answer for *any* detection,
@@ -601,10 +609,11 @@ export const detectionTags = function (config = {}) {
   const aimFor = (camera, measured) => {
     if (!measured || !canNavigate()) return null;
     const { width, height, cx, cy, candidates } = measured;
+    // Still ordered by distance to the centroid, so the point we settle on is
+    // the most central one that works.
     const byDistance = candidates
       .map(([x, y]) => ({ u: x / width, v: y / height, d: (x - cx) ** 2 + (y - cy) ** 2 }))
-      .sort((a, b) => a.d - b.d)
-      .slice(0, ATTEMPTS);
+      .sort((a, b) => a.d - b.d);
 
     for (const c of byDistance) {
       if (viewer.directionForImagePoint(camera, c.u, c.v)) return { u: c.u, v: c.v };
