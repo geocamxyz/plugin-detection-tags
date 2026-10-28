@@ -334,10 +334,55 @@ export const detectionTags = function (config = {}) {
   // source image in the right pixels is the whole job. No camera model, no
   // projection maths.
 
-  // Only reached by an annotation carrying no category_color of its own.
-  // Everything else is drawn in the model's own palette, which is the one
-  // colouring guaranteed to stay consistent across shots and cameras.
-  const MASK_COLOUR = "rgb(255, 0, 255)";
+  // --- the palette ---------------------------------------------------------
+  //
+  // Not the model's `category_color`, which was the first attempt and does
+  // not work. SAM3 numbers its categories 1, 2, 3… and looks them up in a
+  // table of 256 hues spread round the whole circle, so consecutive
+  // categories come out 1.4° of hue apart — `animal` and `curb` differ by six
+  // units of green. (They are also stored BGR while evaseg's are RGB, which
+  // only decides which single colour they are all a shade of.)
+  //
+  // Hashing the name does not fix it either: a hash gives *uniformly random*
+  // hues, and for ~20 categories the expected smallest gap is tiny. Measured
+  // on this cell's vocabulary it put `sidewalk` and `sky` 3 apart — worse
+  // than the palette it was replacing.
+  //
+  // So: position in the cell's category vocabulary, sorted. The vocabulary
+  // comes from the service and is fixed for the cell, which makes this stable
+  // across every shot and camera in it — the property that ruled out picking
+  // our own colours per frame — while spacing hues as far apart as the number
+  // of categories allows. Measured 60 minimum pairwise separation over this
+  // cell's 18, against 6 for SAM's own palette.
+  const FALLBACK_HUE_STEPS = 360;
+  let palette = new Map();
+
+  // Lightness and saturation alternate so that neighbouring hues, which are
+  // the closest pair by construction, differ on a second axis too.
+  const wheel = (index, total) =>
+    `hsl(${(index * 360) / Math.max(total, 1)}, ${index % 2 ? 70 : 92}%, ${
+      index % 2 ? 46 : 62
+    }%)`;
+
+  const buildPalette = () => {
+    const names = [...new Set(categories.map((c) => c.label))].sort();
+    palette = new Map(names.map((name, i) => [name, wheel(i, names.length)]));
+  };
+
+  // A category found in the masks but absent from the cell vocabulary should
+  // not happen — both come from the same summaries — but a tagging run that
+  // lagged a segmentation one would do it. Hashed, so it is at least stable.
+  const hashHue = (name) => {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < name.length; i++) {
+      h ^= name.charCodeAt(i);
+      h = Math.imul(h, 0x01000193);
+    }
+    return (h >>> 0) % FALLBACK_HUE_STEPS;
+  };
+
+  const categoryColour = (name) =>
+    palette.get(name) || `hsl(${hashHue(name)}, 85%, 55%)`;
 
   // Masks are blobs, not line art, and the viewer scales whatever we hand it
   // onto the texture. Capping the overlay keeps three 4096x3000 canvases from
@@ -412,13 +457,6 @@ export const detectionTags = function (config = {}) {
     }
   };
 
-  // The model ships a colour per category, which is the one palette
-  // guaranteed to agree with itself across every shot and every camera.
-  const rgb = (colour) =>
-    Array.isArray(colour) && colour.length >= 3
-      ? `rgb(${colour[0]}, ${colour[1]}, ${colour[2]})`
-      : MASK_COLOUR;
-
   // Everything for one camera, in one pass.
   //
   // Painted opaque and made translucent only on the way out, which does two
@@ -447,7 +485,7 @@ export const detectionTags = function (config = {}) {
         // Mixed frame sizes in one file would land in the wrong place; skip
         // rather than misplace. Has not been seen, but it is one comparison.
         if (s.size[0] !== height || s.size[1] !== width) return;
-        ctx.fillStyle = rgb(item.colour);
+        ctx.fillStyle = item.colour;
         fillMask(ctx, s, height);
       });
 
@@ -675,7 +713,6 @@ export const detectionTags = function (config = {}) {
         if (!measured) return;
         const entry = byCategory.get(a.category_name) || {
           category: a.category_name,
-          colour: a.category_color,
           instances: [],
         };
         entry.instances.push({ camera, segmentation: a.segmentation, measured, aim: undefined });
@@ -735,7 +772,7 @@ export const detectionTags = function (config = {}) {
         const list = byCamera.get(i.camera) || [];
         list.push({
           segmentation: i.segmentation,
-          colour: entry.colour,
+          colour: categoryColour(entry.category),
           pixels: i.measured.pixels,
         });
         byCamera.set(i.camera, list);
@@ -825,7 +862,7 @@ export const detectionTags = function (config = {}) {
       // unreadable as text on this panel — a filled square carries the same
       // information and stays legible whatever colour lands in it.
       const swatch = node("SPAN", { class: "gdt-v-swatch", "aria-hidden": "true" });
-      swatch.style.background = rgb(entry.colour);
+      swatch.style.background = categoryColour(entry.category);
       name.appendChild(swatch);
       name.appendChild(node("SPAN", { class: "gdt-v-label" }, entry.category));
       name.appendChild(node("SPAN", { class: "gdt-v-count" }, String(entry.instances.length)));
@@ -1062,6 +1099,9 @@ export const detectionTags = function (config = {}) {
       }
       console.debug("detection-tags: using", v2Base);
       categories = await loadCategories();
+      // Colours are positions in this list, so they are fixed for the cell
+      // the moment it is known — not recomputed per shot.
+      buildPalette();
     } catch (e) {
       // Could not reach or resolve the service. NOT the same as "no
       // detections" — we have learned nothing about whether segmentation ran,

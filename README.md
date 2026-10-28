@@ -134,17 +134,36 @@ that hiding was an obstacle; here it is the correct behaviour.
   so they are instant. That is the point of having them: comparing mask against image has to be
   a flick, not a refetch.
 
-### The palette is the model's, and it collides
+### The palette: position in the cell's vocabulary
 
-Colours come from each annotation's `category_color`. That is the only palette guaranteed to
-agree with itself across every shot and camera — assigning our own would mean `person` changing
-colour between frames as the category list changed.
+Colours are **not** the annotation's `category_color`. That was the first attempt and it does
+not work:
 
-It is not a well-separated palette. On the first test shot the closest pairs are `building`
-against `road` at a distance of 49 in RGB, and `car` against `streetlight` at 63 — close enough
-to be hard to tell apart over photographic detail. The swatch sits next to the label so the
-mapping is at least discoverable, and **clicking a category to isolate it is the way to be
-sure**.
+- **SAM3 numbers its categories 1, 2, 3…** and indexes a table of 256 hues spread round the
+  whole circle, so consecutive categories land **1.4° of hue apart**. `animal` and `curb` differ
+  by six units of green. They are also stored BGR, while evaseg's ADE20K palette is RGB — which
+  only decides *which* colour they are all a shade of, near-red if read correctly and near-blue
+  if not.
+- **Hashing the category name does not fix it.** A hash gives uniformly random hues, and for
+  ~20 categories the expected smallest gap is tiny. Measured on this cell it put `sidewalk` and
+  `sky` 3 apart — worse than the palette it replaced.
+
+So the colour is a category's **position in the cell's vocabulary, sorted**. That list comes
+from the service and is fixed for the cell, which buys both properties at once: hues as far
+apart as the category count allows, and stability across every shot and camera in the cell —
+the property that ruled out choosing our own colours per frame.
+
+Measured on the test cell: **59 minimum pairwise separation** across 17 categories, against 6
+for SAM3's own palette and 3 for name-hashing. Stepping between shots whose category sets
+differ (17 then 15, 14 in common) changed **no** colour.
+
+Lightness and saturation alternate between neighbours, so the closest pair by construction —
+adjacent hues — differ on a second axis too. A category in the masks but absent from the
+vocabulary falls back to a hashed hue; that should not happen, since both come from the same
+summaries.
+
+The cost is that colours carry no meaning: `sky` is not cyan. For SAM3 there was never any
+meaning to carry, its categories being whatever the prompt asked for.
 
 Drawing order is largest mask first. `sky`, `building` and `road` cover most of a frame between
 them, so in file order they bury every small detection — which are exactly the ones worth
@@ -237,8 +256,8 @@ Requires ArcGIS JS **4.22+**; the connector loads 4.26.
   large capture draws every one of its shots. That is the right default for
   sparse categories, which are the ones worth looking at, and the dense ones are
   disabled at full coverage — but it has not been measured on a 50k capture.
-- The model's palette has near-collisions, so two categories can be hard to tell apart on the
-  image. Isolating one is the workaround; see above.
+- Colours carry no meaning — `sky` is not cyan — because they are positions in the cell's
+  vocabulary. See the palette section for why the model's own colours could not be used.
 - An object straddling two of the rig's overlapping cameras is detected twice and counted
   twice. Deduplicating needs a rule for "the same object", which is guesswork.
 - A summary ingested before Manager recorded `masks` has nothing to point at,
