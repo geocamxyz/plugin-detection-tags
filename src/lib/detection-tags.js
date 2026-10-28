@@ -568,51 +568,114 @@ export const detectionTags = function (config = {}) {
     fn(lastColumn, 0, lastRow);
   };
 
-  // Keeps the candidate list bounded however large the mask is, by halving it
-  // and sampling half as often whenever it fills. Which candidates survive
-  // does not matter — they only have to be spread over the mask.
-  const CANDIDATE_LIMIT = 512;
+  // Keeps each component's candidate list bounded however large it is, by
+  // halving it and sampling half as often whenever it fills. Which candidates
+  // survive does not matter — they only have to be spread over the region.
+  const CANDIDATE_LIMIT = 128;
 
-  // Area, centroid, and a bounded set of points known to be *on* the mask.
-  const measureMask = (segmentation) => {
+  // A region below this is mask fringe, not a thing you could look at — about
+  // a 16x16 blob in a 4096x3000 frame. There is no natural cut here: measured
+  // over one shot, component sizes run continuously from 20 pixels upward
+  // with no gap, so this is a judgement and not a discovered boundary. Too
+  // low and a ragged edge reads as a dozen extra detections; too high and a
+  // distant car disappears from the count.
+  const MIN_COMPONENT = 256;
+
+  // One annotation is not one detection.
+  //
+  // evaseg is a *semantic* segmentor: it emits a single `car` mask per image
+  // covering every car in it. Counting annotations therefore reported "3" for
+  // a frame with seven cars in it — 3 being the number of cameras, not the
+  // number of cars. Instance segmentors (sam3, yolo) emit one annotation per
+  // object, so counting annotations was right for them and wrong for evaseg,
+  // and a category can draw from both at once.
+  //
+  // Splitting every mask into connected regions settles it without the plugin
+  // needing to know which annotator is which: for an instance segmentor each
+  // mask is almost always a single region, so this changes nothing, and for a
+  // semantic one it recovers the objects.
+  //
+  // Run-based labelling with union-find — segments are already the natural
+  // unit, and there are a few thousand of them against twelve million pixels.
+  const measureComponents = (segmentation) => {
     const size = segmentation.size || [];
     const height = size[0];
     const width = size[1];
-    if (!height || !width) return null;
+    if (!height || !width) return [];
 
     const runs = decodeCounts(segmentation.counts);
-    let pixels = 0;
-    let sumX = 0;
-    let sumY = 0;
-    const candidates = [];
-    let seen = 0;
-    let stride = 1;
-    let at = 0;
 
+    // Collect segments, grouped by column so only neighbours are compared.
+    const segs = [];
+    const columns = new Map();
+    let at = 0;
     for (let i = 0; i < runs.length; i++) {
       if (i % 2 === 1 && runs[i] > 0) {
         eachSegment(at, at + runs[i] - 1, height, (column, from, to) => {
-          const n = to - from + 1;
-          pixels += n;
-          sumX += column * n;
-          sumY += ((from + to) / 2) * n;
-          if (seen++ % stride === 0) {
-            candidates.push([column, (from + to) >> 1]);
-            if (candidates.length >= CANDIDATE_LIMIT) {
-              let keep = 0;
-              for (let k = 1; k < candidates.length; k += 2)
-                candidates[keep++] = candidates[k];
-              candidates.length = keep;
-              stride *= 2;
-            }
-          }
+          const id = segs.length;
+          segs.push([column, from, to]);
+          const list = columns.get(column);
+          if (list) list.push(id);
+          else columns.set(column, [id]);
         });
       }
       at += runs[i];
     }
+    if (!segs.length) return [];
 
-    if (!pixels) return null;
-    return { width, height, pixels, cx: sumX / pixels, cy: sumY / pixels, candidates };
+    const parent = new Int32Array(segs.length);
+    for (let i = 0; i < segs.length; i++) parent[i] = i;
+    const find = (x) => {
+      while (parent[x] !== x) x = parent[x] = parent[parent[x]];
+      return x;
+    };
+
+    // Touching in adjacent columns with overlapping rows is one region.
+    columns.forEach((ids, column) => {
+      const previous = columns.get(column - 1);
+      if (!previous) return;
+      ids.forEach((i) => {
+        previous.forEach((j) => {
+          if (segs[i][1] <= segs[j][2] && segs[j][1] <= segs[i][2]) {
+            const a = find(i);
+            const b = find(j);
+            if (a !== b) parent[b] = a;
+          }
+        });
+      });
+    });
+
+    const found = new Map();
+    segs.forEach((s, i) => {
+      const root = find(i);
+      let m = found.get(root);
+      if (!m) {
+        m = { width, height, pixels: 0, sumX: 0, sumY: 0, candidates: [], seen: 0, stride: 1 };
+        found.set(root, m);
+      }
+      const n = s[2] - s[1] + 1;
+      m.pixels += n;
+      m.sumX += s[0] * n;
+      m.sumY += ((s[1] + s[2]) / 2) * n;
+      if (m.seen++ % m.stride === 0) {
+        m.candidates.push([s[0], (s[1] + s[2]) >> 1]);
+        if (m.candidates.length >= CANDIDATE_LIMIT) {
+          let keep = 0;
+          for (let k = 1; k < m.candidates.length; k += 2)
+            m.candidates[keep++] = m.candidates[k];
+          m.candidates.length = keep;
+          m.stride *= 2;
+        }
+      }
+    });
+
+    return [...found.values()]
+      .filter((m) => m.pixels >= MIN_COMPONENT)
+      .map((m) => ({
+        width, height, pixels: m.pixels,
+        cx: m.sumX / m.pixels, cy: m.sumY / m.pixels,
+        candidates: m.candidates,
+      }));
   };
 
   // Where to point to see this instance.
@@ -704,18 +767,30 @@ export const detectionTags = function (config = {}) {
     );
     if (stamp !== detectionsStamp) return; // a later shot owns this now
 
+    // Masks are what gets drawn, instances are what gets counted and pointed
+    // at. They are not the same list: one semantic mask can hold seven cars,
+    // and drawing it seven times would be seven times the work for an
+    // identical result.
     const byCategory = new Map();
     fetched.forEach(({ camera, doc }) => {
       if (!doc) return;
       (doc.annotations || []).forEach((a) => {
         if (!a || !a.category_name || !a.segmentation) return;
-        const measured = measureMask(a.segmentation);
-        if (!measured) return;
+        const regions = measureComponents(a.segmentation);
+        if (!regions.length) return;
         const entry = byCategory.get(a.category_name) || {
           category: a.category_name,
+          masks: [],
           instances: [],
         };
-        entry.instances.push({ camera, segmentation: a.segmentation, measured, aim: undefined });
+        entry.masks.push({
+          camera,
+          segmentation: a.segmentation,
+          pixels: regions.reduce((n, r) => n + r.pixels, 0),
+        });
+        regions.forEach((measured) => {
+          entry.instances.push({ camera, measured, aim: undefined });
+        });
         byCategory.set(a.category_name, entry);
       });
     });
@@ -768,14 +843,14 @@ export const detectionTags = function (config = {}) {
 
     const byCamera = new Map();
     shown.forEach((entry) =>
-      entry.instances.forEach((i) => {
-        const list = byCamera.get(i.camera) || [];
+      entry.masks.forEach((m) => {
+        const list = byCamera.get(m.camera) || [];
         list.push({
-          segmentation: i.segmentation,
+          segmentation: m.segmentation,
           colour: categoryColour(entry.category),
-          pixels: i.measured.pixels,
+          pixels: m.pixels,
         });
-        byCamera.set(i.camera, list);
+        byCamera.set(m.camera, list);
       })
     );
 

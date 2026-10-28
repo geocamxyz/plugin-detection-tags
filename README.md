@@ -124,8 +124,8 @@ that hiding was an obstacle; here it is the correct behaviour.
 
 ### What it does
 
-- Lists every category found in the current shot, with an instance count and a **colour
-  swatch** matching how it is drawn.
+- Lists every category found in the current shot, with a **count of separate regions** and a
+  **colour swatch** matching how it is drawn. See below — a count is not an annotation count.
 - **Draws every category at once**, each in its own colour. Clicking a category isolates it;
   clicking it again brings the rest back. No selection means *everything*, not nothing — the
   panel is a legend for the image, so the whole picture is the useful resting state.
@@ -135,6 +135,41 @@ that hiding was an obstacle; here it is the correct behaviour.
 - **show masks** and **opacity** both only change how the already-decoded masks are composited,
   so they are instant. That is the point of having them: comparing mask against image has to be
   a flick, not a refetch.
+
+### What the count counts
+
+Connected regions of mask, not annotations.
+
+That distinction is the whole thing, because the annotators disagree about what an annotation
+is. **evaseg is a semantic segmentor**: it emits one `car` mask per image covering every car in
+it. **sam3, yolo and textseg are instance segmentors**: one annotation per object. On a single
+camera of one test shot:
+
+| annotator | `car` annotations |
+|---|---|
+| evaseg | 1 (every car) |
+| yolov11seg | 2 (one each) |
+
+Counting annotations therefore reported **3 cars** for a frame with seven in it — 3 being the
+number of cameras. And since a category can draw from both kinds at once, there was no single
+right interpretation of the number.
+
+Splitting every mask into connected regions settles it without the plugin needing to know which
+annotator is which: for an instance segmentor each mask is almost always one region, so nothing
+changes, and for a semantic one it recovers the objects. Measured over one shot, `sign` went
+21 → 21 and `text` 7 → 7, while `road` went 3 → 7 and `car` 10 → 12.
+
+Two honest limits:
+
+- **Touching objects merge.** Two cars parked bumper to bumper are one region in a semantic
+  mask. Nothing short of instance segmentation fixes that.
+- **Stuff is not things.** `sky` splits into however many patches the buildings cut it into —
+  7 on the test shot. Literally true, and more informative than the old "3", but nobody thinks
+  of it as seven skies. Separating *things* from *stuff* would need a taxonomy we do not have.
+
+Regions below 256 pixels are dropped as mask fringe. There is no natural cut: measured over one
+shot, region sizes run continuously from 20 pixels upward with no gap, so that number is a
+judgement, not a discovered boundary.
 
 ### The palette: position in the cell's vocabulary
 
