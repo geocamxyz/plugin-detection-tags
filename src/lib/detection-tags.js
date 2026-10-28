@@ -46,6 +46,40 @@ const STYLES = `
     vertical-align: middle; background-repeat: no-repeat; background-position: center;
     background-size: 16px 16px; }
   .gdt-off { opacity: .4; cursor: default; }
+
+  /* The viewer panel sits over the imagery, so it follows the viewer's own
+     enhancement panel — dark and translucent — rather than the map panel's
+     white card, which would read as a foreign object on a photograph. */
+  .gdt-v-panel { position: absolute; top: 0; left: 56px; background: rgba(0,0,0,.45);
+    border: 1px solid rgba(255,255,255,.15); border-radius: 8px; padding: 12px; color: #fff;
+    font: 12px/1.4 system-ui, sans-serif; min-width: 220px; max-width: calc(100% - 72px);
+    max-height: 60vh; overflow-y: auto; box-shadow: 0 4px 12px rgba(0,0,0,.25);
+    backdrop-filter: blur(6px); pointer-events: auto; z-index: 5; }
+  .gdt-v-panel.is-hidden { display: none; }
+  .gdt-v-head { font-size: 12px; font-weight: 600; letter-spacing: .03em;
+    text-transform: uppercase; margin-bottom: 10px; }
+  .gdt-v-list { display: flex; flex-direction: column; gap: 4px; }
+  .gdt-v-row { display: flex; align-items: center; gap: 8px; }
+  .gdt-v-name { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 8px;
+    background: none; border: 1px solid transparent; border-radius: 6px; padding: 3px 6px;
+    color: inherit; font: inherit; text-align: left; cursor: pointer; }
+  .gdt-v-name:hover { border-color: rgba(255,255,255,.35); }
+  .gdt-v-name.active { border-color: #2dd4bf; background: rgba(45,212,191,.15); font-weight: 600; }
+  .gdt-v-label { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .gdt-v-count { opacity: .6; font-variant-numeric: tabular-nums; }
+  .gdt-v-chips { display: flex; flex-wrap: wrap; gap: 3px; }
+  .gdt-v-chip { min-width: 20px; height: 20px; padding: 0 4px; border-radius: 4px;
+    border: 1px solid rgba(255,255,255,.3); background: rgba(255,255,255,.08); color: #fff;
+    font: 11px/1 system-ui, sans-serif; cursor: pointer; }
+  .gdt-v-chip:hover { background: rgba(255,255,255,.22); }
+  /* A detection outside the lens circle has nowhere to turn to. Shown struck
+     through rather than hidden, so a click gets an explanation. */
+  .gdt-v-chip.gdt-chip-dead { opacity: .35; text-decoration: line-through; cursor: default; }
+  .gdt-v-more { opacity: .55; font-size: 11px; align-self: center; }
+  .gdt-v-note { opacity: .7; }
+  .gdt-v-foot { margin-top: 10px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,.15);
+    display: flex; align-items: center; gap: 6px; cursor: pointer; }
+  .gdt-v-toggle.is-open { background: rgba(255,255,255,.25); }
   .geocam-detection-tags-icon { background-image: url('data:image/svg+xml;utf8,\
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2"\
  stroke-linecap="round" stroke-linejoin="round"><path d="M3 8V5a2 2 0 0 1 2-2h3"/>\
@@ -78,6 +112,15 @@ export const detectionTags = function (config = {}) {
   let hitLayer = null; // our own layer, only the selected category
   let tokenRegistered = false;
   const unsubscribe = []; // viewer store subscriptions, dropped on destroy
+
+  // The viewer panel's state, deliberately separate from the map panel's
+  // `selected`. The two answer different questions — "which shots contain a
+  // person" versus "what is in this image" — and the first is asked with the
+  // panorama closed, which is exactly when this panel does not exist.
+  let imageSelected = null; // category drawn on the imagery, or null
+  let showMasks = true;
+  let panelOpen = false;
+  let viewerButton, viewerPanelEl, viewerListEl, maskToggle;
 
   injectStyle("geocam-detection-tags", STYLES);
 
@@ -405,70 +448,389 @@ export const detectionTags = function (config = {}) {
     painted.clear();
   };
 
-  // Every caller fires this and walks away — a selection, a shot change, the
-  // panorama opening. Without this the whole thing is an unhandled rejection
-  // that Chrome reports under no stack anyone will connect to this plugin.
-  const drawMasks = () =>
-    paintMasks().catch((e) =>
-      console.warn("detection-tags: could not draw masks", e)
+  // Every summary that recorded masks for this capture. Per capture because
+  // a mask base is a segmentation *service*, which belongs to one capture's
+  // run. Collected across every category rather than one, because the panel
+  // describes the whole image and two categories can come from two runs.
+  const maskBasesFor = (capture) => {
+    const bases = new Set();
+    categories.forEach((c) =>
+      (c.summaries || []).forEach((s) => {
+        const base = s.masks && s.masks[capture];
+        if (base) bases.add(base);
+      })
     );
+    return [...bases];
+  };
 
-  const paintMasks = async () => {
-    clearMasks();
-    if (!overlaysSupported() || !viewer.visible()) return;
+  // Walk a run as whole-column segments. A run is a contiguous span of
+  // column-major indices, so it is one partial column, some full ones, and
+  // another partial column — the same decomposition fillRun draws with, but
+  // yielded rather than filled so the geometry can be measured in run time
+  // instead of pixel time. A full-frame mask is ~3000 runs against 12 million
+  // pixels, and the panel measures every mask of every category on the shot.
+  const eachSegment = (from, to, height, fn) => {
+    const firstColumn = Math.floor(from / height);
+    const lastColumn = Math.floor(to / height);
+    const firstRow = from % height;
+    const lastRow = to % height;
+    if (firstColumn === lastColumn) return fn(firstColumn, firstRow, lastRow);
+    fn(firstColumn, firstRow, height - 1);
+    for (let c = firstColumn + 1; c < lastColumn; c++) fn(c, 0, height - 1);
+    fn(lastColumn, 0, lastRow);
+  };
 
-    const category = categories.find((c) => c.field === selected);
-    if (!category) return;
+  // Keeps the candidate list bounded however large the mask is, by halving it
+  // and sampling half as often whenever it fills. Which candidates survive
+  // does not matter — they only have to be spread over the mask.
+  const CANDIDATE_LIMIT = 512;
+
+  // Area, centroid, and a bounded set of points known to be *on* the mask.
+  const measureMask = (segmentation) => {
+    const size = segmentation.size || [];
+    const height = size[0];
+    const width = size[1];
+    if (!height || !width) return null;
+
+    const runs = decodeCounts(segmentation.counts);
+    let pixels = 0;
+    let sumX = 0;
+    let sumY = 0;
+    const candidates = [];
+    let seen = 0;
+    let stride = 1;
+    let at = 0;
+
+    for (let i = 0; i < runs.length; i++) {
+      if (i % 2 === 1 && runs[i] > 0) {
+        eachSegment(at, at + runs[i] - 1, height, (column, from, to) => {
+          const n = to - from + 1;
+          pixels += n;
+          sumX += column * n;
+          sumY += ((from + to) / 2) * n;
+          if (seen++ % stride === 0) {
+            candidates.push([column, (from + to) >> 1]);
+            if (candidates.length >= CANDIDATE_LIMIT) {
+              let keep = 0;
+              for (let k = 1; k < candidates.length; k += 2)
+                candidates[keep++] = candidates[k];
+              candidates.length = keep;
+              stride *= 2;
+            }
+          }
+        });
+      }
+      at += runs[i];
+    }
+
+    if (!pixels) return null;
+    return { width, height, pixels, cx: sumX / pixels, cy: sumY / pixels, candidates };
+  };
+
+  // Where to point to see this instance.
+  //
+  // The centroid is NOT it: an L-shaped, crescent or split mask puts its
+  // centroid off the object, which on real data is 4 detections in 12. So
+  // this takes the candidate nearest the centroid instead — all candidates
+  // are on the mask by construction.
+  //
+  // It then has to keep looking, because a point can be on the mask and still
+  // have no direction: outside the fisheye circle there is no geometry, and
+  // the models label that black border perfectly happily. Roughly half the
+  // frame is outside the circle, and 3 detections in 12 chose a point there.
+  // Returns null when nothing on the mask is reachable, so the caller can say
+  // so rather than appear to ignore a click.
+  const ATTEMPTS = 64;
+
+  // Separate from aimFor returning null, which means "nothing on this mask is
+  // reachable". A viewer without the call cannot answer for *any* detection,
+  // and reporting that as "outside the lens circle" would send someone
+  // looking at the segmentation data for a fault in the viewer build.
+  const canNavigate = () => typeof viewer.directionForImagePoint === "function";
+
+  const aimFor = (camera, measured) => {
+    if (!measured || !canNavigate()) return null;
+    const { width, height, cx, cy, candidates } = measured;
+    const byDistance = candidates
+      .map(([x, y]) => ({ u: x / width, v: y / height, d: (x - cx) ** 2 + (y - cy) ** 2 }))
+      .sort((a, b) => a.d - b.d)
+      .slice(0, ATTEMPTS);
+
+    for (const c of byDistance) {
+      if (viewer.directionForImagePoint(camera, c.u, c.v)) return { u: c.u, v: c.v };
+    }
+    return null;
+  };
+
+  // --- what is in this shot ------------------------------------------------
+
+  let detections = []; // [{ category, instances: [{ camera, segmentation, measured, aim }] }]
+  let detectionsStamp = 0;
+  let loadingDetections = false;
+
+  const clearDetections = () => {
+    detectionsStamp += 1;
+    detections = [];
+    loadingDetections = false;
+  };
+
+  // Fetched when the panel opens, and again on a shot change while it is
+  // open — never merely because a category is selected somewhere. Nothing is
+  // read from object storage for a user who is not looking at the image.
+  const loadDetections = async () => {
+    clearDetections();
+    const stamp = detectionsStamp;
+    if (!viewer.visible()) return renderViewerPanel();
 
     const capture = (viewer.shotInfo() || {}).capture;
     const urls = viewer.urls() || [];
-    // One base per summary that found this category in this capture. Usually
-    // one; two means two runs both found it and both get drawn.
-    const bases = category.summaries
-      .map((s) => s.masks && s.masks[capture])
-      .filter(Boolean);
-    // The map selection still works here, so this is easy to miss. Say which
-    // half is missing: a Manager too old to publish `summaries`, a summary
-    // ingested before masks were recorded, and a shot whose capture no
-    // summary covers all look identical from the outside.
+    const bases = maskBasesFor(capture);
     if (!bases.length || !urls.length) {
       console.info(
-        `detection-tags: no masks drawn for ${category.label} — ` +
+        `detection-tags: nothing to read for this shot — ` +
           (urls.length
-            ? `${category.summaries.length} summary/ies, none recording masks for capture ${capture}`
+            ? `no summary records masks for capture ${capture}`
             : "no images on screen")
       );
+      return renderViewerPanel();
+    }
+
+    loadingDetections = true;
+    renderViewerPanel();
+
+    const fetched = await Promise.all(
+      urls.flatMap((url, camera) =>
+        bases.map((base) =>
+          fetchMask(base, url).then((doc) => ({ camera, doc }))
+        )
+      )
+    );
+    if (stamp !== detectionsStamp) return; // a later shot owns this now
+
+    const byCategory = new Map();
+    fetched.forEach(({ camera, doc }) => {
+      if (!doc) return;
+      (doc.annotations || []).forEach((a) => {
+        if (!a || !a.category_name || !a.segmentation) return;
+        const measured = measureMask(a.segmentation);
+        if (!measured) return;
+        const entry = byCategory.get(a.category_name) || {
+          category: a.category_name,
+          colour: a.category_color,
+          instances: [],
+        };
+        entry.instances.push({ camera, segmentation: a.segmentation, measured, aim: undefined });
+        byCategory.set(a.category_name, entry);
+      });
+    });
+
+    // Stable, or the number beside a detection means something different
+    // after every redraw. Camera first, then biggest first within it.
+    detections = [...byCategory.values()]
+      .map((e) => {
+        e.instances.sort(
+          (a, b) => a.camera - b.camera || b.measured.pixels - a.measured.pixels
+        );
+        return e;
+      })
+      .sort((a, b) => a.category.localeCompare(b.category));
+
+    loadingDetections = false;
+    renderViewerPanel();
+    drawMasks();
+  };
+
+  // --- drawing -------------------------------------------------------------
+
+  // Every caller fires this and walks away — a selection, a shot change, the
+  // panorama opening. Without this the whole thing is an unhandled rejection
+  // that Chrome reports under no stack anyone will connect to this plugin.
+  const drawMasks = () => {
+    try {
+      paintMasks();
+    } catch (e) {
+      console.warn("detection-tags: could not draw masks", e);
+    }
+  };
+
+  // Synchronous: everything it needs was fetched and decoded by
+  // loadDetections. That is what lets the show-masks toggle be a real A/B
+  // against the image rather than a refetch with a pause in the middle.
+  const paintMasks = () => {
+    clearMasks();
+    if (!overlaysSupported() || !viewer.visible()) return;
+    if (!showMasks || !imageSelected) return;
+
+    const entry = detections.find((d) => d.category === imageSelected);
+    if (!entry) return;
+
+    const byCamera = new Map();
+    entry.instances.forEach((i) => {
+      const list = byCamera.get(i.camera) || [];
+      list.push({ segmentation: i.segmentation });
+      byCamera.set(i.camera, list);
+    });
+
+    byCamera.forEach((instances, camera) => {
+      const canvas = paint(instances);
+      if (!canvas) return;
+      viewer.imageOverlay(camera, canvas);
+      painted.add(camera);
+    });
+  };
+
+  // --- the viewer panel ----------------------------------------------------
+  //
+  // Styled after the viewer's own enhancement panel rather than the map
+  // panel: it lives over the imagery, where a white card would be wrong.
+
+  const goTo = (entry, instance, chip) => {
+    // Resolved here rather than at load, because the masks can arrive before
+    // the hemisphere geometry does and a point has no direction until the
+    // mesh it lands on exists. Cached after the first success.
+    if (instance.aim === undefined) instance.aim = aimFor(instance.camera, instance.measured);
+
+    if (!instance.aim) {
+      // On the mask but outside the fisheye circle — nothing to turn towards.
+      // Say so on the chip; a click that silently does nothing reads as a bug.
+      chip.classList.add("gdt-chip-dead");
+      chip.title = `This ${entry.category} is outside the lens circle, so there is nowhere to turn`;
       return;
     }
 
-    const stamp = maskStamp;
-    await Promise.all(
-      urls.map(async (url, camera) => {
-        const docs = await Promise.all(bases.map((b) => fetchMask(b, url)));
-        // A later selection or shot change owns the overlays now.
-        if (stamp !== maskStamp) return;
+    if (imageSelected !== entry.category) {
+      imageSelected = entry.category;
+      drawMasks();
+    }
+    viewer.lookAtImagePoint(instance.camera, instance.aim.u, instance.aim.v);
+    renderViewerPanel();
+  };
 
-        const found = docs
-          .filter(Boolean)
-          .flatMap((d) => d.annotations || [])
-          .filter((a) => a && a.category_name === category.label);
-        if (!found.length) return;
+  const selectForImage = (category) => {
+    imageSelected = imageSelected === category ? null : category;
+    drawMasks();
+    renderViewerPanel();
+  };
 
-        const canvas = paint(found);
-        if (!canvas || stamp !== maskStamp) return;
-        viewer.imageOverlay(camera, canvas);
-        painted.add(camera);
-      })
+  // Past this many, reading a list is slower than panning the image — the
+  // question this answers is "where is the one traffic light", not
+  // "enumerate forty pedestrians".
+  const MAX_CHIPS = 9;
+
+  const renderViewerPanel = () => {
+    if (!viewerListEl) return;
+    viewerListEl.innerHTML = "";
+    viewerPanelEl.classList.toggle("is-hidden", !panelOpen);
+    if (maskToggle) maskToggle.checked = showMasks;
+    if (!panelOpen) return;
+
+    if (loadingDetections) {
+      viewerListEl.appendChild(node("DIV", { class: "gdt-v-note" }, "reading detections&hellip;"));
+      return;
+    }
+    if (!detections.length) {
+      viewerListEl.appendChild(
+        node("DIV", { class: "gdt-v-note" }, "No detections in this shot.")
+      );
+      return;
+    }
+    if (!canNavigate()) {
+      viewerListEl.appendChild(
+        node("DIV", { class: "gdt-v-note" }, "Viewer too old to centre on a detection.")
+      );
+    }
+
+    detections.forEach((entry) => {
+      const row = node("DIV", { class: "gdt-v-row" });
+
+      const name = node("BUTTON", {
+        class: `gdt-v-name${imageSelected === entry.category ? " active" : ""}`,
+        type: "button",
+        title: `Draw every ${entry.category} in this shot`,
+      });
+      name.appendChild(node("SPAN", { class: "gdt-v-label" }, entry.category));
+      name.appendChild(node("SPAN", { class: "gdt-v-count" }, String(entry.instances.length)));
+      name.addEventListener("click", () => selectForImage(entry.category));
+      row.appendChild(name);
+
+      // No go-to at all on a viewer that cannot turn to a point; the counts
+      // and the masks are still worth having.
+      if (canNavigate()) {
+        const chips = node("DIV", { class: "gdt-v-chips" });
+        entry.instances.slice(0, MAX_CHIPS).forEach((instance, i) => {
+          const chip = node("BUTTON", {
+            class: `gdt-v-chip${instance.aim === null ? " gdt-chip-dead" : ""}`,
+            type: "button",
+            title: `Centre on ${entry.category} ${i + 1} (camera ${instance.camera})`,
+          }, String(i + 1));
+          chip.addEventListener("click", () => goTo(entry, instance, chip));
+          chips.appendChild(chip);
+        });
+        if (entry.instances.length > MAX_CHIPS) {
+          chips.appendChild(
+            node("SPAN", { class: "gdt-v-more" }, `+${entry.instances.length - MAX_CHIPS}`)
+          );
+        }
+        row.appendChild(chips);
+      }
+      viewerListEl.appendChild(row);
+    });
+  };
+
+  const setPanelOpen = (open) => {
+    panelOpen = open;
+    viewerButton.classList.toggle("is-open", open);
+    if (open && !detections.length && !loadingDetections) {
+      loadDetections();
+    } else {
+      renderViewerPanel();
+    }
+  };
+
+  const buildViewerPanel = () => {
+    viewerButton = node("DIV", {
+      class: "geocam-viewer-control-button gdt-v-toggle",
+      role: "button",
+      title: "Detections in this image",
+    });
+    viewerButton.appendChild(
+      node("SPAN", { class: "geocam-detection-tags-icon", "aria-hidden": "true" })
     );
+    viewerButton.addEventListener("click", () => setPanelOpen(!panelOpen));
+
+    viewerPanelEl = node("DIV", { class: "gdt-v-panel is-hidden" });
+    const head = node("DIV", { class: "gdt-v-head" }, "Detections in this image");
+    viewerPanelEl.appendChild(head);
+
+    viewerListEl = node("DIV", { class: "gdt-v-list" });
+    viewerPanelEl.appendChild(viewerListEl);
+
+    const foot = node("LABEL", { class: "gdt-v-foot" });
+    maskToggle = node("INPUT", { type: "checkbox" });
+    maskToggle.checked = showMasks;
+    maskToggle.addEventListener("change", () => {
+      showMasks = maskToggle.checked;
+      // Only adds or removes the overlay — the masks are already decoded, so
+      // flicking this is an A/B against the image rather than a refetch.
+      drawMasks();
+    });
+    foot.appendChild(maskToggle);
+    foot.appendChild(node("SPAN", {}, "show masks"));
+    viewerPanelEl.appendChild(foot);
+
+    return viewerButton;
   };
 
   // --- UI ------------------------------------------------------------------
 
+  // Recolours shots on the map and nothing else. It used to paint the
+  // imagery too, which tied "which shots contain a person" — a question
+  // asked with the panorama closed — to a panel that only exists when it is
+  // open. The image is the viewer panel's business now.
   const select = async (category) => {
     if (!category || selected === category.field) {
       selected = null;
       applyEffect(null);
-      drawMasks();
       render();
       return;
     }
@@ -478,14 +840,10 @@ export const detectionTags = function (config = {}) {
 
     try {
       await applyEffect(category.field);
-      // Deliberately after applyEffect and not awaited together: the map
-      // recolour is the cheap half and should not wait on three image fetches.
-      drawMasks();
     } catch (e) {
       console.warn("detection-tags: could not select", category.field, e);
       selected = null;
       applyEffect(null);
-      drawMasks();
       render();
     }
   };
@@ -664,13 +1022,45 @@ export const detectionTags = function (config = {}) {
       mapView.ui.add(expandWidget, "top-right");
       render();
 
-      // Masks belong to the frame on screen, so follow it. `urls` changes once
-      // per shot and carries exactly the three images the overlays sit on;
-      // `visible` covers opening and closing the panorama. Both fire on
-      // registration, which is what draws the masks if a shot is already open.
+      // The second control, in the viewer rather than the map. The viewer's
+      // control strip lives inside .geocam-viewer, which the page hides
+      // whenever the panorama is collapsed — for the category list above that
+      // was an obstacle, but here it is exactly right: a panel about the open
+      // image should not exist when no image is open.
       if (overlaysSupported()) {
-        unsubscribe.push(viewer.urls(() => drawMasks()));
-        unsubscribe.push(viewer.visible(() => drawMasks()));
+        // left-bottom is the image-tools column, beside the enhancement
+        // toggle, which is the control this one most resembles.
+        viewer.addControl(buildViewerPanel(), "left-bottom");
+        // The panel is a sibling of the whole control strip, not of the
+        // button: its `left: 56px` is measured from the strip, which is how
+        // the viewer's own enhancement panel is positioned.
+        const strip =
+          viewerButton.closest(".geocam-viewer-controls") ||
+          (viewer.element && viewer.element.querySelector(".geocam-viewer-controls"));
+        if (strip) strip.appendChild(viewerPanelEl);
+        else console.warn("detection-tags: no control strip to hang the panel on");
+
+        // `urls` changes once per shot and carries exactly the three images
+        // the detections belong to; `visible` covers opening and closing the
+        // panorama. Both fire on registration.
+        unsubscribe.push(
+          viewer.urls(() => {
+            // S4: only re-read if someone is looking. A shot change with the
+            // panel shut should cost nothing.
+            clearDetections();
+            clearMasks();
+            if (panelOpen) loadDetections();
+          })
+        );
+        unsubscribe.push(
+          viewer.visible((v) => {
+            if (!v) {
+              clearDetections();
+              clearMasks();
+              setPanelOpen(false);
+            }
+          })
+        );
       } else {
         console.info(
           "detection-tags: viewer has no imageOverlay — categories only, no masks"
@@ -689,6 +1079,7 @@ export const detectionTags = function (config = {}) {
     applyEffect(null);
     unsubscribe.splice(0).forEach((off) => off());
     clearMasks();
+    clearDetections();
     if (expandWidget) {
       if (mapView && mapView.ui) mapView.ui.remove(expandWidget);
       expandWidget.destroy();
@@ -697,6 +1088,12 @@ export const detectionTags = function (config = {}) {
       if (mapView && mapView.ui) mapView.ui.remove(button);
       if (button.parentNode) button.parentNode.removeChild(button);
     }
+    // Added to the viewer's own DOM rather than a widget registry, so these
+    // come out by hand.
+    [viewerButton, viewerPanelEl].forEach((el) => {
+      if (el && el.parentNode) el.parentNode.removeChild(el);
+    });
     expandWidget = button = panel = listEl = clearBtn = fadeInput = null;
+    viewerButton = viewerPanelEl = viewerListEl = maskToggle = null;
   };
 };

@@ -101,6 +101,61 @@ Three earlier approaches, and why each was dropped:
 The current approach has none of those: the filtering is server-side so there
 is no id list and no size ceiling, and nothing global is mutated.
 
+## Two panels, two questions
+
+The plugin mounts **two** controls, because there are two different questions and one of them
+is asked with the panorama shut:
+
+| | Map panel | Viewer panel |
+|---|---|---|
+| Answers | which **shots** in this cell contain X | what was detected in **this image** |
+| Lives in | `mapView.ui`, top-right | the viewer's own control strip, beside image enhance |
+| Selection | its own | its own, independent |
+| Does | recolours shots | draws masks, counts, centres on each detection |
+
+They share no selection state. "Which shot has a person in it" has to work with the viewer
+closed — which is exactly when the viewer panel does not exist — so tying the two together would
+break the map's main use. The map panel does **not** touch the imagery at all.
+
+The viewer panel is hidden in map mode for free, because `.geocam-viewer` is. For the map panel
+that hiding was an obstacle; here it is the correct behaviour.
+
+### What it does
+
+- Lists every category found in the current shot, with an instance count.
+- **Numbered chips** per instance — click to centre the view on it. Capped at 9: past that,
+  panning finds them faster than a list does. The question this answers is *"where is the one
+  traffic light"*, not "enumerate forty pedestrians".
+- **show masks** toggles the overlay without refetching or re-decoding, so it is a real A/B
+  against the image.
+
+Chips are ordered by camera, then by descending mask area, so the number beside a detection
+means the same thing after a redraw.
+
+### Reading is lazy
+
+Nothing is fetched until the panel is opened, and a shot change with it shut costs nothing.
+Open it, and the masks for the frame on screen are read; change shot while open and they are
+re-read. Previously, selecting a category on the *map* fetched three files per shot whether or
+not anyone was looking at the image.
+
+### Centring, and when a chip is dead
+
+Go-to uses `viewer.lookAtImagePoint`, so there is no camera model here either — see below.
+
+Two things make the obvious implementation wrong, both confirmed on real data:
+
+- **The centroid of a mask is often not on it** (4 of 12 detections sampled). So the target is
+  the point nearest the centroid that is *on* the mask.
+- **A point on the mask may still have no direction.** Roughly half the frame lies outside the
+  fisheye circle, where there is no geometry, and the models label that black border quite
+  happily — 3 of those same 12 chose a point there. So the target is the nearest on-mask point
+  **that resolves to a direction**, and a detection where none does gets a struck-through chip
+  that says why. A click that silently does nothing reads as a bug.
+
+A viewer too old to centre is a different failure and says so separately, rather than blaming
+the lens circle for a missing API.
+
 ## Masks over the imagery
 
 With a category selected and the panorama open, the plugin also paints that
