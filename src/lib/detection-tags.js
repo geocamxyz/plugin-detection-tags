@@ -988,14 +988,13 @@ export const detectionTags = function (config = {}) {
   const render = () => {
     listEl.innerHTML = "";
 
-    // Least-covered first: a category on 1 of 18 shots is the one worth
-    // looking at, and one on all 18 is the one worth ignoring.
-    const ordered = [...categories].sort((a, b) => {
-      if (a.count === b.count) return a.label.localeCompare(b.label);
-      if (a.count === null) return 1;
-      if (b.count === null) return -1;
-      return a.count - b.count;
-    });
+    // Alphabetical, matching the viewer panel. This was least-covered first,
+    // on the argument that a category on 1 of 18 shots is the one worth
+    // looking at — which holds when you are browsing, but not when you came
+    // here knowing what you wanted. Open-vocabulary prompting turned the list
+    // from a dozen entries into dozens, and at that length a known name is
+    // only findable in a predictable order. Coverage is still on every row.
+    const ordered = [...categories].sort((a, b) => a.label.localeCompare(b.label));
 
     const shown = config.hideFullCoverage
       ? ordered.filter((c) => !isFullCoverage(c))

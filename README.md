@@ -48,8 +48,10 @@ map layer, so it belongs with the map's controls.
 
 - **One category at a time.** Selecting another replaces the first; clicking the
   active one, or *clear*, removes the effect.
-- **Sorted least-covered first.** A category on 1 of 18 shots is the one worth
-  looking at; one on all 18 is the one worth ignoring.
+- **Sorted alphabetically**, the same as the viewer panel. It was least-covered
+  first, which suits browsing but not arriving with a name in mind; once
+  open-vocabulary prompting pushed the list from a dozen entries to dozens, a
+  predictable order mattered more. The `n / N` coverage is still on every row.
 - **Categories on every shot are shown but disabled**, with a tooltip saying
   why. Highlighting one would recolour every shot, which tells you nothing.
   They are listed rather than hidden because hiding them reads as a bug —

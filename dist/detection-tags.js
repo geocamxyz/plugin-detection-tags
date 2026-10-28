@@ -1,8 +1,8 @@
 const l = (p, d = {}, m = "") => {
-  const u = document.createElement(p);
-  for (let g in d)
-    u.setAttribute(g, d[g]);
-  return u.innerHTML = m, u;
+  const g = document.createElement(p);
+  for (let u in d)
+    g.setAttribute(u, d[u]);
+  return g.innerHTML = m, g;
 }, He = (p, d) => {
   if (!document.getElementById(p)) {
     const m = l("STYLE", { type: "text/css", id: p }, d);
@@ -103,7 +103,7 @@ const l = (p, d = {}, m = "") => {
   .geocam-detection-tags-icon { background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8V5a2 2 0 0 1 2-2h3"/><path d="M16 3h3a2 2 0 0 1 2 2v3"/><path d="M21 16v3a2 2 0 0 1-2 2h-3"/><path d="M8 21H5a2 2 0 0 1-2-2v-3"/><circle cx="12" cy="12" r="3"/></svg>'); }
 `;
 const je = function(p = {}) {
-  let d, m, u, g, b, w, x;
+  let d, m, g, u, b, w, x;
   const f = p.mapView;
   let k = null, M = [], A = null, C = null, R = !0, O = null, D = null, oe = !1;
   const j = [];
@@ -269,9 +269,9 @@ const je = function(p = {}) {
     const r = [];
     let h = 0, v = 1, Q = 0;
     for (let P = 0; P < a.length; P++)
-      P % 2 === 1 && a[P] > 0 && De(Q, Q + a[P] - 1, n, (ge, Z, ee) => {
+      P % 2 === 1 && a[P] > 0 && De(Q, Q + a[P] - 1, n, (ue, Z, ee) => {
         const te = ee - Z + 1;
-        if (s += te, c += ge * te, i += (Z + ee) / 2 * te, h++ % v === 0 && (r.push([ge, Z + ee >> 1]), r.length >= _e)) {
+        if (s += te, c += ue * te, i += (Z + ee) / 2 * te, h++ % v === 0 && (r.push([ue, Z + ee >> 1]), r.length >= _e)) {
           let fe = 0;
           for (let ne = 1; ne < r.length; ne += 2)
             r[fe++] = r[ne];
@@ -421,7 +421,7 @@ const je = function(p = {}) {
     }
   }, he = (e) => e.count !== null && A !== null && e.count >= A, U = () => {
     b.innerHTML = "";
-    const e = [...M].sort((a, s) => a.count === s.count ? a.label.localeCompare(s.label) : a.count === null ? 1 : s.count === null ? -1 : a.count - s.count), t = p.hideFullCoverage ? e.filter((a) => !he(a)) : e;
+    const e = [...M].sort((a, s) => a.label.localeCompare(s.label)), t = p.hideFullCoverage ? e.filter((a) => !he(a)) : e;
     t.forEach((a) => {
       const s = he(a), c = ["gdt-li"];
       C === a.field && c.push("active"), s && c.push("gdt-full");
@@ -440,8 +440,8 @@ const je = function(p = {}) {
         )
       ), s || i.addEventListener("click", () => pe(a)), b.appendChild(i);
     }), w.disabled = !C;
-    const n = e.length - t.length, o = g.querySelector(".gdt-note");
-    o && o.remove(), n > 0 && g.appendChild(
+    const n = e.length - t.length, o = u.querySelector(".gdt-note");
+    o && o.remove(), n > 0 && u.appendChild(
       l(
         "DIV",
         { class: "gdt-note" },
@@ -449,36 +449,36 @@ const je = function(p = {}) {
       )
     );
   }, Fe = () => {
-    g = l("DIV", { class: "gdt-panel" });
+    u = l("DIV", { class: "gdt-panel" });
     const e = l("DIV", { class: "gdt-h" });
-    e.appendChild(l("SPAN", {}, "Detections")), w = l("BUTTON", { class: "gdt-clear", type: "button" }, "clear"), w.disabled = !0, w.addEventListener("click", () => pe(null)), e.appendChild(w), g.appendChild(e), b = l("UL", { class: "gdt-list" }), g.appendChild(b);
+    e.appendChild(l("SPAN", {}, "Detections")), w = l("BUTTON", { class: "gdt-clear", type: "button" }, "clear"), w.disabled = !0, w.addEventListener("click", () => pe(null)), e.appendChild(w), u.appendChild(e), b = l("UL", { class: "gdt-list" }), u.appendChild(b);
     const t = l("LABEL", { class: "gdt-foot" });
     return x = l("INPUT", { type: "checkbox" }), x.checked = R, x.addEventListener("change", () => {
       R = x.checked;
       const n = se();
       n && (n.opacity = C && R ? 0.15 : 1);
-    }), t.appendChild(x), t.appendChild(l("SPAN", {}, "fade the rest")), g.appendChild(t), g;
-  }, ue = (e) => {
+    }), t.appendChild(x), t.appendChild(l("SPAN", {}, "fade the rest")), u.appendChild(t), u;
+  }, ge = (e) => {
     console.info(`detection-tags: not shown — ${e}`);
   };
   this.init = async function(e) {
     d = e;
     try {
       if (k = await we(), !k)
-        return ue(
+        return ge(
           p.connectorSrc ? `no geocam.v2Path advertised by ${p.connectorSrc} (Manager too old?)` : "no src attribute and no arcgis connector src to discover one from"
         );
       console.debug("detection-tags: using", k), M = await ve(), Ee();
     } catch (n) {
-      return ue(`${k || p.connectorSrc} — ${n.message}`);
+      return ge(`${k || p.connectorSrc} — ${n.message}`);
     }
     const t = M.length === 0;
     if (t && console.info(`detection-tags: no tag_* fields on ${k}/0 — showing disabled`), t)
-      u = l("DIV", {
+      g = l("DIV", {
         class: "esri-widget--button gdt-off",
         role: "button",
         title: "Segmentations or summary not completed"
-      }), u.appendChild(l("SPAN", { class: "geocam-detection-tags-icon", "aria-hidden": "true" })), f.ui.add(u, "top-right");
+      }), g.appendChild(l("SPAN", { class: "geocam-detection-tags-icon", "aria-hidden": "true" })), f.ui.add(g, "top-right");
     else {
       const [n] = await q(["esri/widgets/Expand"]);
       if (m = new n({
@@ -509,9 +509,9 @@ const je = function(p = {}) {
       `detection-tags: ${M.length} categories, shot total ${A === null ? "unknown" : A} — added to the map UI${t ? " (disabled)" : ""}`
     );
   }, this.destroy = function() {
-    B(null), j.splice(0).forEach((e) => e()), F(), H(), m && (f && f.ui && f.ui.remove(m), m.destroy()), u && (f && f.ui && f.ui.remove(u), u.parentNode && u.parentNode.removeChild(u)), [T, E].forEach((e) => {
+    B(null), j.splice(0).forEach((e) => e()), F(), H(), m && (f && f.ui && f.ui.remove(m), m.destroy()), g && (f && f.ui && f.ui.remove(g), g.parentNode && g.parentNode.removeChild(g)), [T, E].forEach((e) => {
       e && e.parentNode && e.parentNode.removeChild(e);
-    }), m = u = g = b = w = x = null, T = E = y = S = null;
+    }), m = g = u = b = w = x = null, T = E = y = S = null;
   };
 };
 class Ye extends HTMLElement {
@@ -525,11 +525,11 @@ class Ye extends HTMLElement {
       return;
     }
     let m = 0;
-    const u = 8e3, g = () => {
+    const g = 8e3, u = () => {
       const b = d.viewer, w = d.querySelector(
         "geocam-viewer-arcgis-map, geocam-viewer-arcgis-scene"
       ), x = w && w.mapView;
-      if (m === u && console.warn(
+      if (m === g && console.warn(
         "detection-tags: still waiting to attach after 8s —",
         `viewer: ${!!b}, connector: ${!!w}, mapView: ${!!x}`
       ), b && typeof b.plugin == "function" && x) {
@@ -546,9 +546,9 @@ class Ye extends HTMLElement {
           hideFullCoverage: this.hasAttribute("hide-full-coverage")
         }), this.viewer.plugin(this.plugin);
       } else
-        m += 100, setTimeout(g, 100);
+        m += 100, setTimeout(u, 100);
     };
-    g();
+    u();
   }
   disconnectedCallback() {
     this.plugin && typeof this.plugin.destroy == "function" && this.plugin.destroy(), this.plugin = null, this.viewer = null;
