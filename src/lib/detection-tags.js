@@ -58,16 +58,21 @@ const STYLES = `
   .gdt-v-panel.is-hidden { display: none; }
   .gdt-v-head { font-size: 12px; font-weight: 600; letter-spacing: .03em;
     text-transform: uppercase; margin-bottom: 10px; }
-  .gdt-v-list { display: flex; flex-direction: column; gap: 4px; }
-  .gdt-v-row { display: flex; align-items: center; gap: 8px; }
-  .gdt-v-name { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 8px;
+  /* Two real columns, so the counts sit under each other and every first
+     chip starts at the same x. A per-row flex cannot do that: the chip group
+     is a different width on every row, which pushes everything before it
+     around. The row wrapper is gone for the same reason — name and chips are
+     grid items in their own right. */
+  .gdt-v-list { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px;
+    align-items: center; }
+  .gdt-v-name { min-width: 0; display: flex; align-items: center; gap: 10px;
     background: none; border: 1px solid transparent; border-radius: 6px; padding: 3px 6px;
     color: inherit; font: inherit; text-align: left; cursor: pointer; }
   .gdt-v-name:hover { border-color: rgba(255,255,255,.35); }
   .gdt-v-name.active { border-color: #2dd4bf; background: rgba(45,212,191,.15); font-weight: 600; }
   .gdt-v-label { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .gdt-v-count { opacity: .6; font-variant-numeric: tabular-nums; }
-  .gdt-v-chips { display: flex; flex-wrap: wrap; gap: 3px; }
+  .gdt-v-chips { display: flex; flex-wrap: wrap; gap: 3px; justify-self: start; }
   .gdt-v-chip { min-width: 20px; height: 20px; padding: 0 4px; border-radius: 4px;
     border: 1px solid rgba(255,255,255,.3); background: rgba(255,255,255,.08); color: #fff;
     font: 11px/1 system-ui, sans-serif; cursor: pointer; }
@@ -76,10 +81,28 @@ const STYLES = `
      through rather than hidden, so a click gets an explanation. */
   .gdt-v-chip.gdt-chip-dead { opacity: .35; text-decoration: line-through; cursor: default; }
   .gdt-v-more { opacity: .55; font-size: 11px; align-self: center; }
-  .gdt-v-note { opacity: .7; }
+  .gdt-v-note { opacity: .7; grid-column: 1 / -1; }
   .gdt-v-foot { margin-top: 10px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,.15);
     display: flex; align-items: center; gap: 6px; cursor: pointer; }
-  .gdt-v-toggle.is-open { background: rgba(255,255,255,.25); }
+  /* The viewer puts a control's icon on the button as a centred background
+     image — no child element. A 16px span inside a 32px button is what left
+     this one sitting up in the corner. White, because this strip is dark;
+     the map's copy of the same glyph is black against Esri's white button. */
+  /* Two classes deliberately: injectStyle PREPENDS this sheet to head, so at
+     equal specificity the viewer's own .geocam-viewer-control-button wins and
+     background-size stays "cover", stretching the glyph to the edges. */
+  .geocam-viewer-control-button.gdt-v-toggle { background-image: url('data:image/svg+xml;utf8,\
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"\
+ stroke-linecap="round" stroke-linejoin="round"><path d="M3 8V5a2 2 0 0 1 2-2h3"/>\
+<path d="M16 3h3a2 2 0 0 1 2 2v3"/><path d="M21 16v3a2 2 0 0 1-2 2h-3"/>\
+<path d="M8 21H5a2 2 0 0 1-2-2v-3"/><circle cx="12" cy="12" r="3"/></svg>');
+    background-size: 20px 20px; background-repeat: no-repeat; background-position: center;
+    color: transparent; }
+  /* Same active treatment as the viewer's own enhancement toggle. */
+  .geocam-viewer-control-button.gdt-v-toggle:hover,
+  .geocam-viewer-control-button.gdt-v-toggle.is-open {
+    background-color: rgba(77, 163, 255, .8); border-color: rgba(77, 163, 255, .9);
+    box-shadow: 0 0 12px rgba(77, 163, 255, .35); }
   .geocam-detection-tags-icon { background-image: url('data:image/svg+xml;utf8,\
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2"\
  stroke-linecap="round" stroke-linejoin="round"><path d="M3 8V5a2 2 0 0 1 2-2h3"/>\
@@ -741,8 +764,6 @@ export const detectionTags = function (config = {}) {
     }
 
     detections.forEach((entry) => {
-      const row = node("DIV", { class: "gdt-v-row" });
-
       const name = node("BUTTON", {
         class: `gdt-v-name${imageSelected === entry.category ? " active" : ""}`,
         type: "button",
@@ -751,12 +772,14 @@ export const detectionTags = function (config = {}) {
       name.appendChild(node("SPAN", { class: "gdt-v-label" }, entry.category));
       name.appendChild(node("SPAN", { class: "gdt-v-count" }, String(entry.instances.length)));
       name.addEventListener("click", () => selectForImage(entry.category));
-      row.appendChild(name);
+      viewerListEl.appendChild(name);
 
-      // No go-to at all on a viewer that cannot turn to a point; the counts
-      // and the masks are still worth having.
+      // Always appended, even when empty: each row has to contribute both
+      // grid cells or every row after it slides across by one.
+      const chips = node("DIV", { class: "gdt-v-chips" });
+      // No go-to on a viewer that cannot turn to a point; the counts and the
+      // masks are still worth having.
       if (canNavigate()) {
-        const chips = node("DIV", { class: "gdt-v-chips" });
         entry.instances.slice(0, MAX_CHIPS).forEach((instance, i) => {
           const chip = node("BUTTON", {
             class: `gdt-v-chip${instance.aim === null ? " gdt-chip-dead" : ""}`,
@@ -771,9 +794,8 @@ export const detectionTags = function (config = {}) {
             node("SPAN", { class: "gdt-v-more" }, `+${entry.instances.length - MAX_CHIPS}`)
           );
         }
-        row.appendChild(chips);
       }
-      viewerListEl.appendChild(row);
+      viewerListEl.appendChild(chips);
     });
   };
 
@@ -788,14 +810,13 @@ export const detectionTags = function (config = {}) {
   };
 
   const buildViewerPanel = () => {
+    // No icon child: the viewer's buttons carry their glyph as a centred
+    // background image, which is what keeps it in the middle of the box.
     viewerButton = node("DIV", {
       class: "geocam-viewer-control-button gdt-v-toggle",
       role: "button",
       title: "Detections in this image",
     });
-    viewerButton.appendChild(
-      node("SPAN", { class: "geocam-detection-tags-icon", "aria-hidden": "true" })
-    );
     viewerButton.addEventListener("click", () => setPanelOpen(!panelOpen));
 
     viewerPanelEl = node("DIV", { class: "gdt-v-panel is-hidden" });
