@@ -196,6 +196,11 @@ Two things make the obvious implementation wrong, both confirmed on real data:
   happily — 3 of those same 12 chose a point there. So the target is the nearest on-mask point
   **that resolves to a direction**, and a detection where none does gets a struck-through chip
   that says why. A click that silently does nothing reads as a bug.
+- **Some calibrations have unusable UVs on the rim.** Where the fisheye projection diverges,
+  a few rigs emit UVs of ~1e27; one triangle like that spans the whole texture and swallows
+  every lookup, so go-to turned to the same rim point whatever you clicked. The viewer skips
+  them (UVs outside `[-1, 2]`), so this needs viewer 2.4.15+. Masks were never affected —
+  those triangles are a sliver outside the lens circle on screen.
 - **Every candidate is tried, not the nearest few.** A large mask can straddle the circle's edge
   with its *centroid outside it* — a shopfront sign running off the top of the frame does this —
   and then every point near the centroid fails while plenty further out would work. An earlier
