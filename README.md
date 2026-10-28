@@ -159,13 +159,17 @@ annotator is which: for an instance segmentor each mask is almost always one reg
 changes, and for a semantic one it recovers the objects. Measured over one shot, `sign` went
 21 → 21 and `text` 7 → 7, while `road` went 3 → 7 and `car` 10 → 12.
 
-Two honest limits:
+Two consequences, both reviewed and accepted:
 
 - **Touching objects merge.** Two cars parked bumper to bumper are one region in a semantic
-  mask. Nothing short of instance segmentation fixes that.
-- **Stuff is not things.** `sky` splits into however many patches the buildings cut it into —
-  7 on the test shot. Literally true, and more informative than the old "3", but nobody thinks
-  of it as seven skies. Separating *things* from *stuff* would need a taxonomy we do not have.
+  mask. Understandable, and not worth instance segmentation to avoid.
+- **"Stuff" classes split.** `sky` becomes however many patches the buildings cut it into — 7
+  on the test shot. That is the right answer rather than a wart: they are genuinely separate
+  patches, and the breaks are the interesting part, since going to each one is how you see what
+  interrupted it. The same holds for `road`, `building` and the rest.
+
+Not handled: the rig's cameras overlap, so an object straddling two hemispheres is counted
+twice.
 
 Regions below 256 pixels are dropped as mask fringe. There is no natural cut: measured over one
 shot, region sizes run continuously from 20 pixels upward with no gap, so that number is a
